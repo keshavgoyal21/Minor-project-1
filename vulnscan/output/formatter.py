@@ -16,5 +16,9 @@ def print_results(data, mode):
 
         for port in host["open_ports"]:
             print(f"  [+] Port {port['port']} OPEN")
+            if port.get("service"):
+                print(f"      Service: {port['service']}")
+            if port.get("version"):
+                print(f"      Version: {port['version']}")
             if port["banner"]:
                 print(f"      Banner: {port['banner'][:60]}")

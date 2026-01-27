@@ -23,16 +23,47 @@ def scan_port(ip, port):
     sock = socket.socket()
     sock.settimeout(TIMEOUT)
     result = sock.connect_ex((ip, port))
+    service = None
+    version = None
+    banner = None
     if result == 0:
         try:
-            sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
+            # Try to get banner
+            if port == 80 or port == 8080:
+                sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
+            elif port == 21:
+                # FTP
+                pass  # FTP usually sends banner on connect
+            elif port == 22:
+                # SSH
+                pass  # SSH usually sends banner on connect
+            elif port == 25:
+                # SMTP
+                sock.send(b"EHLO example.com\r\n")
+            # else: just try to receive
             banner = sock.recv(1024).decode(errors="ignore")
         except Exception:
             banner = None
-        sock.close()
-        return True, banner
+        finally:
+            sock.close()
+
+        # Service name detection
+        try:
+            service = socket.getservbyport(port)
+        except Exception:
+            service = None
+
+        # Version detection (very basic, from banner)
+        if banner:
+            import re
+            # Try to extract version from banner
+            version_match = re.search(r"([A-Za-z0-9\-]+)[/ ]([0-9]+(\.[0-9]+)+)", banner)
+            if version_match:
+                service = version_match.group(1)
+                version = version_match.group(2)
+        return True, banner, service, version
     sock.close()
-    return False, None
+    return False, None, None, None
 
 def scan_target(target, ports):
     ports = parse_ports(ports)
@@ -47,11 +78,13 @@ def scan_target(target, ports):
     for ip in ips:
         host = {"ip": ip, "open_ports": []}
         for port in ports:
-            open_, banner = scan_port(ip, port)
+            open_, banner, service, version = scan_port(ip, port)
             if open_:
                 host["open_ports"].append({
                     "port": port,
-                    "banner": banner.strip() if banner else None
+                    "banner": banner.strip() if banner else None,
+                    "service": service,
+                    "version": version
                 })
         scan_data["hosts"].append(host)
 
