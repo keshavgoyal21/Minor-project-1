@@ -1,22 +1,79 @@
 #!/usr/bin/env python3
+
+import argparse
+
 from dotenv import load_dotenv
 load_dotenv()
-import argparse
+
 from scanner.network import scan_target
-from output.formatter import print_results
 from api.Api import query_nvd
+from output.formatter import print_results
 
-
+load_dotenv()
 
 
 def banner():
     print("""
 ========================================
  VulnScan - API Driven Vulnerability Tool
- Target: Web & IoT Environments
- Platform: Kali Linux
+ API-based Vulnerability Correlation
 ========================================
 """)
+
+
+def parse_cve(cve_item):
+    cve = cve_item["cve"]
+
+    cve_id = cve["id"]
+    description = cve["descriptions"][0]["value"]
+
+    # CWE (Vulnerability Type)
+    cwe = "Unknown"
+    weaknesses = cve.get("weaknesses", [])
+    if weaknesses:
+        cwe = weaknesses[0]["description"][0]["value"]
+
+    # CVSS
+    severity = "Unknown"
+    score = "N/A"
+    metrics = cve.get("metrics", {})
+    if "cvssMetricV31" in metrics:
+        cvss = metrics["cvssMetricV31"][0]["cvssData"]
+        score = cvss["baseScore"]
+        severity = cvss["baseSeverity"]
+
+    # Exploit / reference URLs
+    references = []
+    for ref in cve.get("references", []):
+        url = ref.get("url", "")
+        if any(x in url.lower() for x in ["exploit", "github", "packetstorm"]):
+            references.append(url)
+
+    return {
+        "cve_id": cve_id,
+        "description": description,
+        "cwe": cwe,
+        "cvss_score": score,
+        "severity": severity,
+        "references": references
+    }
+
+
+def preventive_measures(cwe):
+    cwe = cwe.lower()
+
+    if "sql" in cwe:
+        return "Use parameterized queries, input validation, least privilege DB access"
+    if "xss" in cwe:
+        return "Apply output encoding, CSP, sanitize user input"
+    if "path traversal" in cwe:
+        return "Normalize file paths, restrict file access, patch affected software"
+    if "buffer overflow" in cwe:
+        return "Use bounds checking, safe libraries, enable ASLR/DEP"
+    if "authentication" in cwe:
+        return "Implement strong authentication, MFA, secure password storage"
+
+    return "Apply vendor patches, upgrade software, follow secure configuration guidelines"
 
 
 def main():
@@ -49,25 +106,25 @@ def main():
 
     results = scan_target(args.target, args.ports)
 
-    # === CVE CORRELATION ===
+    # === CVE ENRICHMENT ===
     for host in results["hosts"]:
         for port in host["open_ports"]:
             meta = port.get("meta")
             if not meta:
                 continue
 
-            vulns = query_nvd(
+            raw_vulns = query_nvd(
                 cpe=meta.get("cpe"),
                 keyword=meta.get("keyword")
             )
 
-            port["vulnerabilities"] = [
-                {
-                    "cve_id": v["cve"]["id"],
-                    "description": v["cve"]["descriptions"][0]["value"]
-                }
-                for v in vulns
-            ]
+            enriched_vulns = []
+            for v in raw_vulns:
+                parsed = parse_cve(v)
+                parsed["mitigation"] = preventive_measures(parsed["cwe"])
+                enriched_vulns.append(parsed)
+
+            port["vulnerabilities"] = enriched_vulns
 
     print_results(results, args.output)
 
