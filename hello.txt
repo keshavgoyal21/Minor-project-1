@@ -4,3 +4,13 @@ tools_precheck = [
                     ["wapiti"], ["whatweb"], ["nmap"], ["golismero"], ["host"], ["wget"], ["uniscan"], ["wafw00f"], ["dirb"], ["davtest"], ["theHarvester"], ["xsser"], ["dnsrecon"],["fierce"], ["dnswalk"], ["whois"], ["sslyze"], ["lbd"], ["golismero"], ["dnsenum"],["dmitry"], ["davtest"], ["nikto"], ["dnsmap"], ["amass"]
                  ]
 
+
+sudo nmap --script vuln<ip>
+
+what are the thing wee needed for matching the vulnerabilities witht the api 
+open ports 
+service name 
+product name 
+version
+
+these thing than compare with the cve of nvd (nist) than it find the new severity 11
