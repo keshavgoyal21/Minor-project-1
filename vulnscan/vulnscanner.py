@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
-
 from dotenv import load_dotenv
 load_dotenv()
 
 from scanner.network import scan_target
 from api.Api import query_nvd
+from api.exploitdb import search_exploit_by_cve
 from output.formatter import print_results
-
-load_dotenv()
 
 
 def banner():
@@ -27,27 +25,26 @@ def parse_cve(cve_item):
     cve_id = cve["id"]
     description = cve["descriptions"][0]["value"]
 
-    # CWE (Vulnerability Type)
     cwe = "Unknown"
     weaknesses = cve.get("weaknesses", [])
     if weaknesses:
         cwe = weaknesses[0]["description"][0]["value"]
 
-    # CVSS
     severity = "Unknown"
     score = "N/A"
+
     metrics = cve.get("metrics", {})
     if "cvssMetricV31" in metrics:
         cvss = metrics["cvssMetricV31"][0]["cvssData"]
         score = cvss["baseScore"]
         severity = cvss["baseSeverity"]
 
-    # Exploit / reference URLs
+    published = cve.get("published", "N/A")
+    last_modified = cve.get("lastModified", "N/A")
+
     references = []
     for ref in cve.get("references", []):
-        url = ref.get("url", "")
-        if any(x in url.lower() for x in ["exploit", "github", "packetstorm"]):
-            references.append(url)
+        references.append(ref.get("url"))
 
     return {
         "cve_id": cve_id,
@@ -55,6 +52,8 @@ def parse_cve(cve_item):
         "cwe": cwe,
         "cvss_score": score,
         "severity": severity,
+        "published": published,
+        "last_modified": last_modified,
         "references": references
     }
 
@@ -63,17 +62,17 @@ def preventive_measures(cwe):
     cwe = cwe.lower()
 
     if "sql" in cwe:
-        return "Use parameterized queries, input validation, least privilege DB access"
+        return "Use parameterized queries and input validation"
     if "xss" in cwe:
-        return "Apply output encoding, CSP, sanitize user input"
+        return "Sanitize user input and use output encoding"
     if "path traversal" in cwe:
-        return "Normalize file paths, restrict file access, patch affected software"
+        return "Normalize file paths and patch software"
     if "buffer overflow" in cwe:
-        return "Use bounds checking, safe libraries, enable ASLR/DEP"
+        return "Use safe libraries and enable ASLR/DEP"
     if "authentication" in cwe:
-        return "Implement strong authentication, MFA, secure password storage"
+        return "Implement MFA and strong password policies"
 
-    return "Apply vendor patches, upgrade software, follow secure configuration guidelines"
+    return "Apply vendor patches and upgrade software"
 
 
 def main():
@@ -83,30 +82,14 @@ def main():
         description="API-driven vulnerability discovery tool"
     )
 
-    parser.add_argument(
-        "-t", "--target",
-        required=True,
-        help="IP, Domain, or Network CIDR"
-    )
-
-    parser.add_argument(
-        "-p", "--ports",
-        default="common",
-        help="Ports to scan (common or comma-separated list)"
-    )
-
-    parser.add_argument(
-        "-o", "--output",
-        choices=["text", "json"],
-        default="text",
-        help="Output format"
-    )
+    parser.add_argument("-t", "--target", required=True)
+    parser.add_argument("-p", "--ports", default="common")
+    parser.add_argument("-o", "--output", choices=["text", "json"], default="text")
 
     args = parser.parse_args()
 
     results = scan_target(args.target, args.ports)
 
-    # === CVE ENRICHMENT ===
     for host in results["hosts"]:
         for port in host["open_ports"]:
             meta = port.get("meta")
@@ -115,13 +98,20 @@ def main():
 
             raw_vulns = query_nvd(
                 cpe=meta.get("cpe"),
-                keyword=meta.get("keyword")
+                keyword=meta.get("keyword"),
+                limit=20   # Increased limit
             )
 
             enriched_vulns = []
+
             for v in raw_vulns:
                 parsed = parse_cve(v)
                 parsed["mitigation"] = preventive_measures(parsed["cwe"])
+
+                exploits = search_exploit_by_cve(parsed["cve_id"])
+                parsed["exploits"] = exploits
+                parsed["exploit_available"] = bool(exploits)
+
                 enriched_vulns.append(parsed)
 
             port["vulnerabilities"] = enriched_vulns

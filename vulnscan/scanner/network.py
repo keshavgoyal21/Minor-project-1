@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 
 COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 8080]
-TIMEOUT = 1
+TIMEOUT = 2
 
 
 def parse_ports(port_arg):
@@ -69,11 +69,15 @@ def scan_port(ip, port):
 
     if result == 0:
         try:
+            # Send HTTP probe only for HTTP ports
             if port in [80, 8080]:
                 sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
-            banner = sock.recv(1024).decode(errors="ignore")
+
+            banner = sock.recv(2048).decode(errors="ignore")
+
         except Exception:
-            pass
+            banner = None
+
         finally:
             sock.close()
 
@@ -82,11 +86,13 @@ def scan_port(ip, port):
         except Exception:
             service = None
 
+        # ================= SAFE VERSION DETECTION =================
         if banner:
             match = re.search(r"([A-Za-z\-]+)[/ ]([0-9]+(\.[0-9]+)+)", banner)
             if match:
                 service = match.group(1)
                 version = match.group(2)
+
 
         return True, banner, service, version
 
@@ -109,8 +115,10 @@ def scan_target(target, ports):
 
         for port in ports:
             open_, banner, service, version = scan_port(ip, port)
+
             if open_:
                 meta = normalize_service(service, version, banner)
+
                 host["open_ports"].append({
                     "port": port,
                     "service": service,
