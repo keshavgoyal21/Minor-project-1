@@ -19,6 +19,33 @@ def banner():
 """)
 
 
+def get_severity_from_score(score):
+    """Convert CVSS score to severity level (for CVSS v2 compatibility)"""
+    try:
+        score = float(score)
+        if score == 0:
+            return "NONE"
+        elif score < 3.9:
+            return "LOW"
+        elif score < 6.9:
+            return "MEDIUM"
+        elif score < 8.9:
+            return "HIGH"
+        else:
+            return "CRITICAL"
+    except (ValueError, TypeError):
+        return "Unknown"
+
+
+def banner():
+    print("""
+========================================
+ VulnScan - API Driven Vulnerability Tool
+ API-based Vulnerability Correlation
+========================================
+""")
+
+
 def parse_cve(cve_item):
     cve = cve_item["cve"]
 
@@ -34,10 +61,21 @@ def parse_cve(cve_item):
     score = "N/A"
 
     metrics = cve.get("metrics", {})
+    
+    # Try different CVSS metric versions (V31, V30, V2)
     if "cvssMetricV31" in metrics:
         cvss = metrics["cvssMetricV31"][0]["cvssData"]
         score = cvss["baseScore"]
         severity = cvss["baseSeverity"]
+    elif "cvssMetricV30" in metrics:
+        cvss = metrics["cvssMetricV30"][0]["cvssData"]
+        score = cvss["baseScore"]
+        severity = cvss["baseSeverity"]
+    elif "cvssMetricV2" in metrics:
+        cvss = metrics["cvssMetricV2"][0]["cvssData"]
+        score = cvss["baseScore"]
+        # CVSS V2 doesn't have baseSeverity, we'll derive it from score
+        severity = get_severity_from_score(score)
 
     published = cve.get("published", "N/A")
     last_modified = cve.get("lastModified", "N/A")
