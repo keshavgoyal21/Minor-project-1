@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
-import argparse
+import sys
+import time
+import itertools
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -10,13 +12,59 @@ from api.exploitdb import search_exploit_by_cve
 from output.formatter import print_results
 
 
-def banner():
-    print("""
-========================================
- VulnScan - API Driven Vulnerability Tool
- API-based Vulnerability Correlation
-========================================
-""")
+# =========================
+# ANSI COLORS
+# =========================
+RED = "\033[91m"
+GREEN = "\033[92m"
+CYAN = "\033[96m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
+BOLD_ANSI = "\033[1m"
+
+
+def type_writer(text, delay=0.02):
+    for char in text:
+        sys.stdout.write(char)
+        sys.stdout.flush()
+        time.sleep(delay)
+    print()
+
+
+def loading_animation(text, duration=3):
+    spinner = itertools.cycle(["|", "/", "-", "\\"])
+    end_time = time.time() + duration
+    while time.time() < end_time:
+        sys.stdout.write(f"\r{CYAN}{text} {next(spinner)}{RESET}")
+        sys.stdout.flush()
+        time.sleep(0.1)
+    print(f"\r{GREEN}{text} ✔{RESET}")
+
+
+def show_banner():
+    logo = f"""
+{RED}{BOLD_ANSI}
+██╗   ██╗██╗   ██╗██╗     ███╗   ██╗███████╗ ██████╗ █████╗ ███╗   ██╗
+██║   ██║██║   ██║██║     ████╗  ██║██╔════╝██╔════╝██╔══██╗████╗  ██║
+██║   ██║██║   ██║██║     ██╔██╗ ██║███████╗██║     ███████║██╔██╗ ██║
+╚██╗ ██╔╝██║   ██║██║     ██║╚██╗██║╚════██║██║     ██╔══██║██║╚██╗██║
+ ╚████╔╝ ╚██████╔╝███████╗██║ ╚████║███████║╚██████╗██║  ██║██║ ╚████║
+  ╚═══╝   ╚═════╝ ╚══════╝╚═╝  ╚═══╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝
+{RESET}
+{GREEN}            >> API-Driven Vulnerability Intelligence Engine <<
+{RESET}
+"""
+    print(logo)
+
+
+def kali_startup():
+    type_writer(f"{CYAN}Initializing VulnScan Engine...{RESET}")
+    time.sleep(0.5)
+    loading_animation("Loading CVE Database")
+    loading_animation("Connecting to NVD API")
+    loading_animation("Connecting to Exploit-DB")
+    loading_animation("Preparing Scan Modules")
+    print(f"\n{GREEN}[+] System Ready. Happy Hunting 😈{RESET}\n")
 
 
 def get_severity_from_score(score):
@@ -172,22 +220,24 @@ def preventive_measures(cwe):
     return "Apply vendor patches and upgrade software"
 
 
-def main():
-    banner()
+def run_scan(target, ports, num_cves, output_mode):
+    """Execute the scan with the given parameters."""
+    print(f"\n{CYAN}[*] Scanning target: {BOLD_ANSI}{target}{RESET}")
+    print(f"{CYAN}[*] Ports: {ports}{RESET}")
+    print(f"{CYAN}[*] Max CVEs per port: {num_cves}{RESET}")
+    print(f"{CYAN}[*] Output mode: {output_mode}{RESET}\n")
 
-    parser = argparse.ArgumentParser(
-        description="API-driven vulnerability discovery tool"
-    )
+    loading_animation("Scanning ports", duration=2)
 
-    parser.add_argument("-t", "--target", required=True)
-    parser.add_argument("-p", "--ports", default="common")
-    parser.add_argument("-o", "--output", choices=["text", "json"], default="text")
-    parser.add_argument("-n", "--num-cves", type=int, default=10,
-                        help="Number of CVEs to display per port (default: 10)")
+    results = scan_target(target, ports)
 
-    args = parser.parse_args()
+    total_open = sum(len(h["open_ports"]) for h in results["hosts"])
+    if total_open == 0:
+        print(f"{YELLOW}[!] No open ports found on {target}{RESET}")
+        print(f"{YELLOW}    Tip: Make sure the target is up and try different ports.{RESET}\n")
+        return
 
-    results = scan_target(args.target, args.ports)
+    loading_animation("Querying NVD for vulnerabilities", duration=2)
 
     for host in results["hosts"]:
         for port in host["open_ports"]:
@@ -198,7 +248,7 @@ def main():
             raw_vulns = query_nvd(
                 cpe=meta.get("cpe"),
                 keyword=meta.get("keyword"),
-                limit=max(20, args.num_cves)  # Fetch enough to fill requested count
+                limit=max(20, num_cves)
             )
 
             enriched_vulns = []
@@ -213,16 +263,156 @@ def main():
 
                 enriched_vulns.append(parsed)
 
-            # Sort by CVSS score descending (most critical first)
             enriched_vulns.sort(
                 key=lambda v: float(v["cvss_score"]) if v["cvss_score"] != "N/A" else -1,
                 reverse=True
             )
 
-            # Limit to the requested number of CVEs
-            port["vulnerabilities"] = enriched_vulns[:args.num_cves]
+            port["vulnerabilities"] = enriched_vulns[:num_cves]
 
-    print_results(results, args.output)
+    print_results(results, output_mode)
+
+
+def show_help():
+    """Display available commands."""
+    print(f"""
+  {BOLD_ANSI}Available Commands:{RESET}
+  ─────────────────────────────────────────────────────
+  {GREEN}scan{RESET}          Start a new vulnerability scan
+  {GREEN}set{RESET}           Set a scan option  (e.g. set target 10.0.0.1)
+  {GREEN}options{RESET}       Show current scan configuration
+  {GREEN}help{RESET}          Show this help menu
+  {GREEN}clear{RESET}         Clear the screen
+  {GREEN}exit{RESET}          Exit VulnScan
+  ─────────────────────────────────────────────────────
+
+  {BOLD_ANSI}Set Options:{RESET}
+  ─────────────────────────────────────────────────────
+  {YELLOW}set target{RESET}    <ip/hostname/CIDR>     Target to scan
+  {YELLOW}set ports{RESET}     <port1,port2 | common>  Ports to scan
+  {YELLOW}set cves{RESET}      <number>                Max CVEs per port
+  {YELLOW}set output{RESET}    <text | json>           Output format
+  ─────────────────────────────────────────────────────
+""")
+
+
+def show_options(config):
+    """Display current scan configuration."""
+    target_val = config["target"] or f"{RED}(not set){RESET}"
+    print(f"""
+  {BOLD_ANSI}Current Configuration:{RESET}
+  ─────────────────────────────────────────────────────
+  {CYAN}TARGET{RESET}     =>  {target_val}
+  {CYAN}PORTS{RESET}      =>  {config['ports']}
+  {CYAN}MAX CVEs{RESET}   =>  {config['num_cves']}
+  {CYAN}OUTPUT{RESET}     =>  {config['output']}
+  ─────────────────────────────────────────────────────
+""")
+
+
+def interactive_cli():
+    """Main interactive CLI loop — like Metasploit / sqlmap."""
+    config = {
+        "target": None,
+        "ports": "common",
+        "num_cves": 10,
+        "output": "text",
+    }
+
+    PROMPT = f"{RED}vulnscan{RESET} > "
+
+    show_help()
+
+    while True:
+        try:
+            raw = input(PROMPT).strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n{GREEN}[+] Exiting VulnScan. Stay safe! 👋{RESET}\n")
+            break
+
+        if not raw:
+            continue
+
+        parts = raw.split()
+        cmd = parts[0].lower()
+
+        # ── exit ──
+        if cmd in ("exit", "quit", "q"):
+            print(f"\n{GREEN}[+] Exiting VulnScan. Stay safe! 👋{RESET}\n")
+            break
+
+        # ── help ──
+        elif cmd in ("help", "h", "?"):
+            show_help()
+
+        # ── clear ──
+        elif cmd == "clear":
+            print("\033c", end="")
+            show_banner()
+
+        # ── options ──
+        elif cmd in ("options", "show", "config"):
+            show_options(config)
+
+        # ── set ──
+        elif cmd == "set":
+            if len(parts) < 3:
+                print(f"  {YELLOW}Usage: set <option> <value>{RESET}")
+                print(f"  {YELLOW}Options: target, ports, cves, output{RESET}")
+                continue
+
+            option = parts[1].lower()
+            value = " ".join(parts[2:])
+
+            if option == "target":
+                config["target"] = value
+                print(f"  {GREEN}TARGET => {value}{RESET}")
+
+            elif option in ("ports", "port"):
+                config["ports"] = value
+                print(f"  {GREEN}PORTS => {value}{RESET}")
+
+            elif option in ("cves", "num-cves", "num_cves", "n"):
+                try:
+                    config["num_cves"] = int(value)
+                    print(f"  {GREEN}MAX CVEs => {value}{RESET}")
+                except ValueError:
+                    print(f"  {RED}[!] Invalid number: {value}{RESET}")
+
+            elif option == "output":
+                if value in ("text", "json"):
+                    config["output"] = value
+                    print(f"  {GREEN}OUTPUT => {value}{RESET}")
+                else:
+                    print(f"  {RED}[!] Output must be 'text' or 'json'{RESET}")
+
+            else:
+                print(f"  {RED}[!] Unknown option: {option}{RESET}")
+                print(f"  {YELLOW}Options: target, ports, cves, output{RESET}")
+
+        # ── scan ──
+        elif cmd in ("scan", "run", "start"):
+            if not config["target"]:
+                print(f"  {RED}[!] Target not set. Use: set target <ip/hostname>{RESET}")
+                continue
+
+            run_scan(
+                target=config["target"],
+                ports=config["ports"],
+                num_cves=config["num_cves"],
+                output_mode=config["output"],
+            )
+
+        # ── unknown ──
+        else:
+            print(f"  {RED}[!] Unknown command: {cmd}{RESET}")
+            print(f"  {YELLOW}Type 'help' for available commands{RESET}")
+
+
+def main():
+    show_banner()
+    kali_startup()
+    interactive_cli()
 
 
 if __name__ == "__main__":
