@@ -37,13 +37,74 @@ def get_severity_from_score(score):
         return "Unknown"
 
 
-def banner():
-    print("""
-========================================
- VulnScan - API Driven Vulnerability Tool
- API-based Vulnerability Correlation
-========================================
-""")
+# Common CWE ID to readable name mapping
+CWE_NAMES = {
+    "CWE-20": "Improper Input Validation",
+    "CWE-22": "Path Traversal",
+    "CWE-77": "Command Injection",
+    "CWE-78": "OS Command Injection",
+    "CWE-79": "Cross-site Scripting (XSS)",
+    "CWE-89": "SQL Injection",
+    "CWE-94": "Code Injection",
+    "CWE-119": "Buffer Overflow",
+    "CWE-120": "Buffer Copy without Size Check",
+    "CWE-125": "Out-of-bounds Read",
+    "CWE-190": "Integer Overflow",
+    "CWE-200": "Information Exposure",
+    "CWE-264": "Permissions / Privileges / Access Control",
+    "CWE-269": "Improper Privilege Management",
+    "CWE-276": "Incorrect Default Permissions",
+    "CWE-287": "Improper Authentication",
+    "CWE-295": "Improper Certificate Validation",
+    "CWE-310": "Cryptographic Issues",
+    "CWE-312": "Cleartext Storage of Sensitive Info",
+    "CWE-352": "Cross-Site Request Forgery (CSRF)",
+    "CWE-362": "Race Condition",
+    "CWE-399": "Resource Management Errors",
+    "CWE-400": "Uncontrolled Resource Consumption",
+    "CWE-416": "Use After Free",
+    "CWE-434": "Unrestricted File Upload",
+    "CWE-476": "NULL Pointer Dereference",
+    "CWE-502": "Deserialization of Untrusted Data",
+    "CWE-522": "Insufficiently Protected Credentials",
+    "CWE-601": "Open Redirect",
+    "CWE-611": "XML External Entity (XXE)",
+    "CWE-667": "Improper Locking",
+    "CWE-732": "Incorrect Permission Assignment",
+    "CWE-787": "Out-of-bounds Write",
+    "CWE-798": "Hard-coded Credentials",
+    "CWE-863": "Incorrect Authorization",
+    "CWE-918": "Server-Side Request Forgery (SSRF)",
+}
+
+
+def resolve_cwe(weaknesses):
+    """Extract the most specific CWE from weaknesses list, skipping NVD placeholders."""
+    generic_values = {"NVD-CWE-Other", "NVD-CWE-noinfo"}
+    best_cwe = None
+    fallback_cwe = None
+
+    for weakness in weaknesses:
+        for desc in weakness.get("description", []):
+            value = desc.get("value", "")
+            if value in generic_values:
+                fallback_cwe = fallback_cwe or value
+            elif value.startswith("CWE-"):
+                best_cwe = value
+                break
+        if best_cwe:
+            break
+
+    cwe_id = best_cwe or fallback_cwe or "Unknown"
+
+    # Resolve to a readable name
+    if cwe_id in CWE_NAMES:
+        return f"{cwe_id} ({CWE_NAMES[cwe_id]})"
+    elif cwe_id == "NVD-CWE-Other":
+        return "Other (Unclassified)"
+    elif cwe_id == "NVD-CWE-noinfo":
+        return "No CWE Info Available"
+    return cwe_id
 
 
 def parse_cve(cve_item):
@@ -52,10 +113,8 @@ def parse_cve(cve_item):
     cve_id = cve["id"]
     description = cve["descriptions"][0]["value"]
 
-    cwe = "Unknown"
     weaknesses = cve.get("weaknesses", [])
-    if weaknesses:
-        cwe = weaknesses[0]["description"][0]["value"]
+    cwe = resolve_cwe(weaknesses)
 
     severity = "Unknown"
     score = "N/A"
@@ -123,6 +182,8 @@ def main():
     parser.add_argument("-t", "--target", required=True)
     parser.add_argument("-p", "--ports", default="common")
     parser.add_argument("-o", "--output", choices=["text", "json"], default="text")
+    parser.add_argument("-n", "--num-cves", type=int, default=10,
+                        help="Number of CVEs to display per port (default: 10)")
 
     args = parser.parse_args()
 
@@ -137,7 +198,7 @@ def main():
             raw_vulns = query_nvd(
                 cpe=meta.get("cpe"),
                 keyword=meta.get("keyword"),
-                limit=20   # Increased limit
+                limit=max(20, args.num_cves)  # Fetch enough to fill requested count
             )
 
             enriched_vulns = []
@@ -152,7 +213,14 @@ def main():
 
                 enriched_vulns.append(parsed)
 
-            port["vulnerabilities"] = enriched_vulns
+            # Sort by CVSS score descending (most critical first)
+            enriched_vulns.sort(
+                key=lambda v: float(v["cvss_score"]) if v["cvss_score"] != "N/A" else -1,
+                reverse=True
+            )
+
+            # Limit to the requested number of CVEs
+            port["vulnerabilities"] = enriched_vulns[:args.num_cves]
 
     print_results(results, args.output)
 

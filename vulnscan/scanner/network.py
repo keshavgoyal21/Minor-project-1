@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 
 COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 8080]
-TIMEOUT = 2
+TIMEOUT = 5
 
 
 def parse_ports(port_arg):
