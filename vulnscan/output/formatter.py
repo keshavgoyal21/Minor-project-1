@@ -93,14 +93,14 @@ def print_vuln_table(vulns):
 
     for i, v in enumerate(vulns, 1):
         sev_str = _c(v["severity"])
-        exp_str = f"{RED}✘{RESET}" if v.get("exploit_available") else f"{GREEN}✔{RESET}"
+        exp_str = f"{GREEN}✔{RESET}" if v.get("exploit_available") else f"{RED}✘{RESET}"
         cwe_short = _trunc(v["cwe"], 22)
         score = str(v["cvss_score"])
 
         print(f"  │{i:^3}│ {v['cve_id']:<15} │ {_pad(sev_str, 9)} │ {score:^5} │ {_pad(exp_str, 4, 'center')} │ {cwe_short:<22} │")
 
     print(f"  {BOLD}└{'─' * 3}┴{'─' * 17}┴{'─' * 11}┴{'─' * 7}┴{'─' * 6}┴{'─' * 24}┘{RESET}")
-    print(f"  {DIM}  ✔ = No exploit   ✘ = Exploit available{RESET}")
+    print(f"  {DIM} ✔ = No exploit   ✘ = Exploit available{RESET}")
 
 
 # ── Detailed CVE Cards ───────────────────────────────
