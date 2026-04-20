@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 
 import sys
+import os
 import time
 import itertools
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    # Load .env from the same directory as this script
+    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(_env_path)
+except ImportError:
+    pass  # .env loading optional — set env vars manually if python-dotenv is missing
 
 from scanner.network import scan_target
+from scanner.behavior import build_host_profile, generate_findings, generate_nvd_keywords, detect_anomalies
+from scanner.packets import analyze_pcap, SCAPY_AVAILABLE
+from scanner.monitor import monitor_target
+from scanner.ai_agent import (
+    GEMINI_AVAILABLE, analyze_vulnerabilities,
+    analyze_network_behavior, assess_zero_day_risk,
+    _refresh_availability,
+)
 from api.Api import query_nvd
 from api.exploitdb import search_exploit_by_cve
-from output.formatter import print_results
+from output.formatter import print_results, print_monitor_report
 
 
 # =========================
@@ -64,6 +78,18 @@ def kali_startup():
     loading_animation("Connecting to NVD API")
     loading_animation("Connecting to Exploit-DB")
     loading_animation("Preparing Scan Modules")
+    loading_animation("Loading Behavior Engine")
+    if SCAPY_AVAILABLE:
+        loading_animation("Packet Analyzer Ready (Scapy)")
+    else:
+        print(f"  {YELLOW}[~] Scapy not installed — packet analysis disabled{RESET}")
+    # Re-check Gemini availability (load_dotenv may have run after initial import)
+    _refresh_availability()
+    from scanner.ai_agent import GEMINI_AVAILABLE as _ai_ready
+    if _ai_ready:
+        loading_animation("AI Security Agent Ready (Gemini)")
+    else:
+        print(f"  {YELLOW}[~] Gemini AI not configured — set GEMINI_API_KEY in .env{RESET}")
     print(f"\n{GREEN}[+] System Ready. Happy Hunting 😈{RESET}\n")
 
 
@@ -220,12 +246,138 @@ def preventive_measures(cwe):
     return "Apply vendor patches and upgrade software"
 
 
-def run_scan(target, ports, num_cves, output_mode):
+def _enrich_cves_from_keywords(keywords, num_cves):
+    """Query NVD for each keyword, parse CVEs, enrich with exploits.
+
+    Returns a list of enriched CVE dicts.  Adds a 1-second delay between
+    NVD calls to respect rate limits.
+    """
+    seen_ids = set()
+    enriched = []
+
+    for kw in keywords:
+        raw_vulns = query_nvd(keyword=kw, limit=max(5, num_cves))
+        for v in raw_vulns:
+            parsed = parse_cve(v)
+            if parsed["cve_id"] in seen_ids:
+                continue
+            seen_ids.add(parsed["cve_id"])
+
+            parsed["mitigation"] = preventive_measures(parsed["cwe"])
+            exploits = search_exploit_by_cve(parsed["cve_id"])
+            parsed["exploits"] = exploits
+            parsed["exploit_available"] = bool(exploits)
+            parsed["source_keyword"] = kw
+            enriched.append(parsed)
+
+        # Respect NVD rate limits
+        time.sleep(1)
+
+    # Sort by CVSS score descending
+    enriched.sort(
+        key=lambda v: float(v["cvss_score"]) if v["cvss_score"] != "N/A" else -1,
+        reverse=True,
+    )
+    return enriched[:num_cves]
+
+
+def run_behavior_analysis(scan_results, pcap_path=None, num_cves=5, skip_cve_enrichment=False):
+    """Build behavior profiles, run packet analysis, and optionally enrich with CVEs.
+
+    Parameters
+    ----------
+    scan_results : dict
+        The results dict from ``scan_target()``.
+    pcap_path : str | None
+        Optional path to a ``.pcap`` file for packet-pattern analysis.
+    num_cves : int
+        Max behavior-driven CVEs to return per source.
+    skip_cve_enrichment : bool
+        If True, skip NVD keyword lookups (AI handles intelligence instead).
+
+    Returns
+    -------
+    dict  with keys: host_profiles, packet_analysis
+    """
+    behavior_results = {
+        "host_profiles": [],
+        "packet_analysis": None,
+    }
+
+    # ── Per-host behavior profiling ──────────────────────────────────
+    for host in scan_results.get("hosts", []):
+        profile = build_host_profile(host)
+        findings = generate_findings(profile)
+        keywords = generate_nvd_keywords(profile, findings)
+        anomalies = detect_anomalies(host)
+
+        # Behavior-driven CVE enrichment (skipped when AI handles intelligence)
+        behavior_cves = []
+        if not skip_cve_enrichment and keywords:
+            behavior_cves = _enrich_cves_from_keywords(keywords, num_cves)
+
+        behavior_results["host_profiles"].append({
+            "ip": profile["ip"],
+            "risk_score": profile["risk_score"],
+            "risk_level": profile["risk_level"],
+            "profile": profile,
+            "findings": findings,
+            "anomalies": anomalies,
+            "nvd_keywords": keywords,
+            "behavior_cves": behavior_cves,
+        })
+
+    # ── Packet analysis (optional) ───────────────────────────────────
+    if pcap_path:
+        if not SCAPY_AVAILABLE:
+            print(f"  {YELLOW}[!] Scapy is not installed — skipping pcap analysis.{RESET}")
+            print(f"  {YELLOW}    Install with: pip install scapy{RESET}")
+        elif not os.path.isfile(pcap_path):
+            print(f"  {YELLOW}[!] PCAP file not found: {pcap_path}{RESET}")
+        else:
+            loading_animation("Analyzing packet capture", duration=2)
+            pkt_result = analyze_pcap(pcap_path)
+
+            if pkt_result:
+                # Collect NVD keywords from all detected patterns
+                pattern_keywords = []
+                for pat in pkt_result.get("patterns", []):
+                    pattern_keywords.extend(pat.get("nvd_keywords", []))
+
+                # De-duplicate
+                seen = set()
+                unique_kw = []
+                for kw in pattern_keywords:
+                    if kw.lower() not in seen:
+                        seen.add(kw.lower())
+                        unique_kw.append(kw)
+                unique_kw = unique_kw[:5]
+
+                # Enrich with CVEs (skipped when AI handles intelligence)
+                pattern_cves = []
+                if not skip_cve_enrichment and unique_kw:
+                    pattern_cves = _enrich_cves_from_keywords(unique_kw, num_cves)
+
+                pkt_result["pattern_keywords"] = unique_kw
+                pkt_result["pattern_cves"] = pattern_cves
+                behavior_results["packet_analysis"] = pkt_result
+
+    return behavior_results
+
+
+def run_scan(target, ports, num_cves, output_mode, pcap_path=None, ai_enabled=True, monitor_duration=0):
     """Execute the scan with the given parameters."""
     print(f"\n{CYAN}[*] Scanning target: {BOLD_ANSI}{target}{RESET}")
     print(f"{CYAN}[*] Ports: {ports}{RESET}")
     print(f"{CYAN}[*] Max CVEs per port: {num_cves}{RESET}")
-    print(f"{CYAN}[*] Output mode: {output_mode}{RESET}\n")
+    print(f"{CYAN}[*] Output mode: {output_mode}{RESET}")
+    if pcap_path:
+        print(f"{CYAN}[*] PCAP file: {pcap_path}{RESET}")
+    ai_active = ai_enabled and GEMINI_AVAILABLE
+    print(f"{CYAN}[*] AI Agent: {'enabled' if ai_active else 'disabled'}{RESET}")
+    if monitor_duration > 0:
+        print(f"{CYAN}[*] Active monitoring: {monitor_duration}s{RESET}")
+    print()
 
     loading_animation("Scanning ports", duration=2)
 
@@ -270,6 +422,87 @@ def run_scan(target, ports, num_cves, output_mode):
 
             port["vulnerabilities"] = enriched_vulns[:num_cves]
 
+    # ── Behavior analysis ────────────────────────────────────────────
+    loading_animation("Running behavior analysis", duration=2)
+    behavior_results = run_behavior_analysis(
+        results, pcap_path=pcap_path, num_cves=num_cves,
+        skip_cve_enrichment=ai_active,
+    )
+    results["behavior_results"] = behavior_results
+
+    # ── Active monitoring (if configured) ────────────────────────────
+    monitoring_data = None
+    if monitor_duration > 0:
+        open_ports = []
+        for host in results["hosts"]:
+            for p in host["open_ports"]:
+                open_ports.append(p["port"])
+        if open_ports:
+            target_ip = results["hosts"][0]["ip"]
+            print(f"\n  {CYAN}[*] Starting active monitoring for {monitor_duration}s...{RESET}")
+            print(f"  {CYAN}    Probing {len(open_ports)} ports every 5 seconds{RESET}")
+            monitoring_data = monitor_target(target_ip, open_ports, duration=monitor_duration)
+            results["monitoring"] = monitoring_data
+            print(f"  {GREEN}[+] Monitoring complete: {monitoring_data['total_rounds']} rounds, "
+                  f"{len(monitoring_data['anomalies'])} anomalies detected{RESET}")
+
+    # ── AI Security Agent ────────────────────────────────────────────
+    results["ai_analysis"] = None
+    if ai_active:
+        loading_animation("AI Agent analyzing scan data", duration=2)
+        ai_analysis = {}
+
+        try:
+            # 1. Vulnerability intelligence (with monitoring data)
+            print(f"  {CYAN}[AI] Analyzing vulnerabilities...{RESET}")
+            vuln_intel = analyze_vulnerabilities(results, behavior_results, monitoring_data)
+            if vuln_intel:
+                ai_analysis["vulnerability_intel"] = vuln_intel
+
+                # Inject AI mitigations into CVE entries
+                cve_mitigations = vuln_intel.get("cve_mitigations", {})
+                if cve_mitigations:
+                    for host in results["hosts"]:
+                        for port in host["open_ports"]:
+                            for vuln in port.get("vulnerabilities", []):
+                                ai_mit = cve_mitigations.get(vuln["cve_id"])
+                                if ai_mit:
+                                    vuln["mitigation"] = ai_mit
+                                    vuln["ai_mitigation"] = True
+
+            # 2. Network behavior analysis
+            print(f"  {CYAN}[AI] Analyzing network behavior...{RESET}")
+            pkt_data = behavior_results.get("packet_analysis")
+            behavior_intel = analyze_network_behavior(behavior_results, pkt_data)
+            if behavior_intel:
+                ai_analysis["behavior_intel"] = behavior_intel
+
+            # 3. Zero-day risk assessment (per host)
+            print(f"  {CYAN}[AI] Assessing zero-day risks...{RESET}")
+            zeroday_results = []
+            for hp in behavior_results.get("host_profiles", []):
+                profile = hp.get("profile", {})
+                findings = hp.get("findings", [])
+                pkt_patterns = []
+                if pkt_data:
+                    pkt_patterns = pkt_data.get("patterns", [])
+                zd = assess_zero_day_risk(profile, findings, pkt_patterns)
+                if zd:
+                    zd["ip"] = hp["ip"]
+                    zeroday_results.append(zd)
+            if zeroday_results:
+                ai_analysis["zero_day_assessment"] = zeroday_results
+
+            if ai_analysis:
+                results["ai_analysis"] = ai_analysis
+                print(f"  {GREEN}[AI] Analysis complete ✔{RESET}")
+            else:
+                print(f"  {YELLOW}[AI] No analysis results returned{RESET}")
+
+        except Exception as e:
+            print(f"  {YELLOW}[AI] Analysis failed: {e}{RESET}")
+            print(f"  {YELLOW}      Scan results are still valid.{RESET}")
+
     print_results(results, output_mode)
 
 
@@ -292,6 +525,9 @@ def show_help():
   {YELLOW}set ports{RESET}     <port1,port2 | common>  Ports to scan
   {YELLOW}set cves{RESET}      <number>                Max CVEs per port
   {YELLOW}set output{RESET}    <text | json>           Output format
+  {YELLOW}set pcap{RESET}      <file path>             PCAP for packet analysis
+  {YELLOW}set ai{RESET}        <on | off>              Toggle AI agent
+  {YELLOW}set monitor{RESET}   <seconds>               Active monitoring duration
   ─────────────────────────────────────────────────────
 """)
 
@@ -299,6 +535,11 @@ def show_help():
 def show_options(config):
     """Display current scan configuration."""
     target_val = config["target"] or f"{RED}(not set){RESET}"
+    pcap_val = config["pcap"] or f"{YELLOW}(none){RESET}"
+    scapy_status = f"{GREEN}available{RESET}" if SCAPY_AVAILABLE else f"{YELLOW}not installed{RESET}"
+    ai_toggle = f"{GREEN}on{RESET}" if config["ai"] else f"{YELLOW}off{RESET}"
+    gemini_status = f"{GREEN}available{RESET}" if GEMINI_AVAILABLE else f"{YELLOW}no API key{RESET}"
+    monitor_val = f"{config['monitor']}s" if config['monitor'] > 0 else f"{YELLOW}(off){RESET}"
     print(f"""
   {BOLD_ANSI}Current Configuration:{RESET}
   ─────────────────────────────────────────────────────
@@ -306,6 +547,11 @@ def show_options(config):
   {CYAN}PORTS{RESET}      =>  {config['ports']}
   {CYAN}MAX CVEs{RESET}   =>  {config['num_cves']}
   {CYAN}OUTPUT{RESET}     =>  {config['output']}
+  {CYAN}PCAP{RESET}       =>  {pcap_val}
+  {CYAN}SCAPY{RESET}      =>  {scapy_status}
+  {CYAN}AI AGENT{RESET}   =>  {ai_toggle}
+  {CYAN}GEMINI{RESET}     =>  {gemini_status}
+  {CYAN}MONITOR{RESET}    =>  {monitor_val}
   ─────────────────────────────────────────────────────
 """)
 
@@ -315,8 +561,11 @@ def interactive_cli():
     config = {
         "target": None,
         "ports": "common",
-        "num_cves": 10,
+        "num_cves": 5,
         "output": "text",
+        "pcap": None,
+        "ai": True,
+        "monitor": 0,
     }
 
     PROMPT = f"{RED}vulnscan{RESET} > "
@@ -358,7 +607,7 @@ def interactive_cli():
         elif cmd == "set":
             if len(parts) < 3:
                 print(f"  {YELLOW}Usage: set <option> <value>{RESET}")
-                print(f"  {YELLOW}Options: target, ports, cves, output{RESET}")
+                print(f"  {YELLOW}Options: target, ports, cves, output, pcap, ai, monitor{RESET}")
                 continue
 
             option = parts[1].lower()
@@ -386,9 +635,41 @@ def interactive_cli():
                 else:
                     print(f"  {RED}[!] Output must be 'text' or 'json'{RESET}")
 
+            elif option == "pcap":
+                if os.path.isfile(value):
+                    config["pcap"] = value
+                    print(f"  {GREEN}PCAP => {value}{RESET}")
+                else:
+                    # Store it anyway — we'll warn at scan time
+                    config["pcap"] = value
+                    print(f"  {YELLOW}[~] PCAP => {value}  (file not found — will recheck at scan time){RESET}")
+
+            elif option == "ai":
+                if value.lower() in ("on", "true", "1", "yes"):
+                    config["ai"] = True
+                    print(f"  {GREEN}AI AGENT => on{RESET}")
+                elif value.lower() in ("off", "false", "0", "no"):
+                    config["ai"] = False
+                    print(f"  {YELLOW}AI AGENT => off{RESET}")
+                else:
+                    print(f"  {RED}[!] AI must be 'on' or 'off'{RESET}")
+
+            elif option == "monitor":
+                try:
+                    secs = int(value)
+                    if secs < 0:
+                        raise ValueError
+                    config["monitor"] = secs
+                    if secs > 0:
+                        print(f"  {GREEN}MONITOR => {secs}s (active probing after scan){RESET}")
+                    else:
+                        print(f"  {YELLOW}MONITOR => off{RESET}")
+                except ValueError:
+                    print(f"  {RED}[!] Monitor must be a positive number of seconds{RESET}")
+
             else:
                 print(f"  {RED}[!] Unknown option: {option}{RESET}")
-                print(f"  {YELLOW}Options: target, ports, cves, output{RESET}")
+                print(f"  {YELLOW}Options: target, ports, cves, output, pcap, ai, monitor{RESET}")
 
         # ── scan ──
         elif cmd in ("scan", "run", "start"):
@@ -401,6 +682,9 @@ def interactive_cli():
                 ports=config["ports"],
                 num_cves=config["num_cves"],
                 output_mode=config["output"],
+                pcap_path=config["pcap"],
+                ai_enabled=config["ai"],
+                monitor_duration=config["monitor"],
             )
 
         # ── unknown ──

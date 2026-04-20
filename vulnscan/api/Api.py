@@ -20,7 +20,12 @@ def query_nvd(keyword=None, cpe=None, limit=5):
     else:
         return []
 
-    response = requests.get(BASE_URL, headers=headers, params=params)
+    try:
+        response = requests.get(BASE_URL, headers=headers, params=params, timeout=15)
+    except (requests.exceptions.SSLError, requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout) as e:
+        print(f"\033[33m  [!] NVD API error: {type(e).__name__} — skipping this query\033[0m")
+        return []
 
     if response.status_code != 200:
         return []

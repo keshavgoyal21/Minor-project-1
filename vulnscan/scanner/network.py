@@ -2,6 +2,7 @@ import socket
 import ipaddress
 from datetime import datetime
 import re
+import time
 
 COMMON_PORTS = [21, 22, 23, 25, 53, 80, 110, 139, 143, 443, 445, 8080]
 TIMEOUT = 5
@@ -61,13 +62,25 @@ def normalize_service(service, version, banner):
 def scan_port(ip, port):
     sock = socket.socket()
     sock.settimeout(TIMEOUT)
+
+    # ── Connection telemetry ──
+    t_connect_start = time.perf_counter()
     result = sock.connect_ex((ip, port))
+    t_connect_end = time.perf_counter()
+    connect_ms = round((t_connect_end - t_connect_start) * 1000, 2)
 
     banner = None
     service = None
     version = None
+    telemetry = {
+        "connect_ms": connect_ms,
+        "banner_recv": False,
+        "banner_len": 0,
+        "response_ms": None,
+    }
 
     if result == 0:
+        t_response_start = time.perf_counter()
         try:
             # Send HTTP probe only for HTTP ports
             if port in [80, 8080]:
@@ -80,6 +93,13 @@ def scan_port(ip, port):
 
         finally:
             sock.close()
+
+        t_response_end = time.perf_counter()
+        telemetry["response_ms"] = round((t_response_end - t_response_start) * 1000, 2)
+
+        if banner:
+            telemetry["banner_recv"] = True
+            telemetry["banner_len"] = len(banner.strip())
 
         try:
             service = socket.getservbyport(port)
@@ -94,10 +114,10 @@ def scan_port(ip, port):
                 version = match.group(2)
 
 
-        return True, banner, service, version
+        return True, banner, service, version, telemetry
 
     sock.close()
-    return False, None, None, None
+    return False, None, None, None, telemetry
 
 
 def scan_target(target, ports):
@@ -111,10 +131,10 @@ def scan_target(target, ports):
     }
 
     for ip in ips:
-        host = {"ip": ip, "open_ports": []}
+        host = {"ip": ip, "open_ports": [], "closed_filtered_count": 0}
 
         for port in ports:
-            open_, banner, service, version = scan_port(ip, port)
+            open_, banner, service, version, telemetry = scan_port(ip, port)
 
             if open_:
                 meta = normalize_service(service, version, banner)
@@ -124,8 +144,11 @@ def scan_target(target, ports):
                     "service": service,
                     "version": version,
                     "banner": banner.strip() if banner else None,
-                    "meta": meta
+                    "meta": meta,
+                    "telemetry": telemetry,
                 })
+            else:
+                host["closed_filtered_count"] += 1
 
         scan_data["hosts"].append(host)
 

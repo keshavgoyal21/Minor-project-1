@@ -1,0 +1,7 @@
+Project_Report_UPES.md
+SRS_VulnScan.md
+.claude/
+venv/
+.DS_Store
+__pycache__/
+*.pyc
