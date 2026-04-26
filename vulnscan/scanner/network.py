@@ -120,7 +120,7 @@ def scan_port(ip, port):
     return False, None, None, None, telemetry
 
 
-def scan_target(target, ports):
+def scan_target(target, ports, stop_requested=None):
     ports = parse_ports(ports)
     ips = resolve_target(target)
 
@@ -131,9 +131,15 @@ def scan_target(target, ports):
     }
 
     for ip in ips:
+        if stop_requested and callable(stop_requested) and stop_requested():
+            break
+
         host = {"ip": ip, "open_ports": [], "closed_filtered_count": 0}
 
         for port in ports:
+            if stop_requested and callable(stop_requested) and stop_requested():
+                break
+
             open_, banner, service, version, telemetry = scan_port(ip, port)
 
             if open_:

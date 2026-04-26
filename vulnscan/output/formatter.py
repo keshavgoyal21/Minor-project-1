@@ -2,6 +2,7 @@ import json
 import re
 import textwrap
 import unicodedata
+from datetime import datetime
 
 # ── ANSI Colors ──────────────────────────────────────
 RED    = "\033[91m"
@@ -106,14 +107,14 @@ def print_vuln_table(vulns):
 
     for i, v in enumerate(vulns, 1):
         sev_str = _c(v["severity"])
-        exp_str = f"{GREEN}✔{RESET}" if v.get("exploit_available") else f"{RED}✘{RESET}"
+        exp_str = f"{GREEN}[YES]{RESET}" if v.get("exploit_available") else f"{RED}[NO]{RESET}"
         cwe_short = _trunc(v["cwe"], 22)
         score = str(v["cvss_score"])
 
         print(f"  │{i:^3}│ {v['cve_id']:<15} │ {_pad(sev_str, 9)} │ {score:^5} │ {_pad(exp_str, 4, 'center')} │ {cwe_short:<22} │")
 
     print(f"  {BOLD}└{'─' * 3}┴{'─' * 17}┴{'─' * 11}┴{'─' * 7}┴{'─' * 6}┴{'─' * 24}┘{RESET}")
-    print(f"  {DIM} ✔ = No exploit   ✘ = Exploit available{RESET}")
+    print(f"  {DIM} [YES] = Exploit available   [NO] = No exploit{RESET}")
 
 
 # ── Detailed CVE Cards ───────────────────────────────
@@ -187,14 +188,14 @@ def print_detailed_vulns(vulns):
         # ── Exploit status ───────────────────────────────────────────
         print(f"  ║{'─' * bw}║")
         if v.get("exploit_available"):
-            section(f"{RED}{BOLD}\u26a0  Exploit Available{RESET}")
+            section(f"{RED}{BOLD}[!]  Exploit Available{RESET}")
             for exp in v.get("exploits", []):
                 url  = exp.get("exploit_url", "")
                 link = f"\033]8;;{url}\a{CYAN}{url}{RESET}\033]8;;\a"
                 # inner = 4(→ prefix+space) + 2("  ") + (bw-7)(url) + 1(right) = bw
                 print(f"  ║  \u2192 {_pad(link, bw - 5)} ║")
         else:
-            section(f"{GREEN}\u2714  No known exploits{RESET}")
+            section(f"{GREEN}[OK]  No known exploits{RESET}")
 
         # ── Card footer ──────────────────────────────────────────────
         print(f"  ╚{'═' * bw}╝\n")
@@ -272,9 +273,9 @@ def print_behavior_assessment(behavior_results, show_cves=True):
             ids = anomalies.get("ids_ips", {})
             honeypot = anomalies.get("honeypot", {})
             print(f"\n  {BOLD}  Anomaly Detection:{RESET}")
-            fw_icon = f"{GREEN}✔ Detected{RESET} ({fw.get('firewall_type', '?')}, {fw.get('confidence', 0)}%)" if fw.get("detected") else f"{DIM}✘ Not detected{RESET}"
-            ids_icon = f"{GREEN}✔ Detected{RESET} ({ids.get('confidence', 0)}%)" if ids.get("detected") else f"{DIM}✘ Not detected{RESET}"
-            hp_icon = f"{RED}⚠ Possible{RESET} ({honeypot.get('confidence', 0)}%)" if honeypot.get("detected") else f"{DIM}✘ Not detected{RESET}"
+            fw_icon = f"{GREEN}[YES] Detected{RESET} ({fw.get('firewall_type', '?')}, {fw.get('confidence', 0)}%)" if fw.get("detected") else f"{DIM}[NO] Not detected{RESET}"
+            ids_icon = f"{GREEN}[YES] Detected{RESET} ({ids.get('confidence', 0)}%)" if ids.get("detected") else f"{DIM}[NO] Not detected{RESET}"
+            hp_icon = f"{RED}[!] Possible{RESET} ({honeypot.get('confidence', 0)}%)" if honeypot.get("detected") else f"{DIM}[NO] Not detected{RESET}"
             print(f"    Firewall : {fw_icon}")
             print(f"    IDS/IPS  : {ids_icon}")
             print(f"    Honeypot : {hp_icon}")
@@ -374,7 +375,7 @@ def print_packet_analysis(packet_analysis):
             print(f"      {DIM}Confidence:{RESET} {p['confidence']}%")
             print(f"      {DIM}Detail:{RESET}     {p['detail']}")
     else:
-        print(f"\n  {GREEN}  ✔ No suspicious packet patterns detected.{RESET}")
+        print(f"\n  {GREEN}  [OK] No suspicious packet patterns detected.{RESET}")
 
     # ── Pattern-driven CVEs ──────────────────────────────────────────
     pattern_cves = packet_analysis.get("pattern_cves", [])
@@ -482,7 +483,7 @@ def print_ai_analysis(ai_analysis):
 
         # Firewall
         fw = behavior_intel.get("firewall_detection", {})
-        fw_icon = f"{GREEN}✔ Detected{RESET}" if fw.get("detected") else f"{DIM}✘ Not detected{RESET}"
+        fw_icon = f"{GREEN}[YES] Detected{RESET}" if fw.get("detected") else f"{DIM}[NO] Not detected{RESET}"
         fw_detail = ""
         if fw.get("detected"):
             fw_detail = f" ({fw.get('firewall_type', '?')}, conf {fw.get('confidence', 0)}%)"
@@ -492,7 +493,7 @@ def print_ai_analysis(ai_analysis):
 
         # IDS/IPS
         ids = behavior_intel.get("ids_ips_detection", {})
-        ids_icon = f"{GREEN}✔ Detected{RESET}" if ids.get("detected") else f"{DIM}✘ Not detected{RESET}"
+        ids_icon = f"{GREEN}[YES] Detected{RESET}" if ids.get("detected") else f"{DIM}[NO] Not detected{RESET}"
         ids_detail = f" (conf {ids.get('confidence', 0)}%)" if ids.get("detected") else ""
         print(f"    {BOLD}IDS/IPS:{RESET}   {ids_icon}{ids_detail}")
         for ev in ids.get("evidence", []):
@@ -502,7 +503,7 @@ def print_ai_analysis(ai_analysis):
 
         # Honeypot
         hp = behavior_intel.get("honeypot_indicators", {})
-        hp_icon = f"{RED}⚠ Likely honeypot{RESET}" if hp.get("detected") else f"{DIM}✘ Not detected{RESET}"
+        hp_icon = f"{RED}[!] Likely honeypot{RESET}" if hp.get("detected") else f"{DIM}[NO] Not detected{RESET}"
         hp_detail = f" (conf {hp.get('confidence', 0)}%)" if hp.get("detected") else ""
         print(f"    {BOLD}Honeypot:{RESET}  {hp_icon}{hp_detail}")
         for ind in hp.get("indicators", []):
@@ -562,9 +563,15 @@ def _wrap_lines(text, width=60):
 
 
 # ── Main Output ──────────────────────────────────────
+def _json_default(value):
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    return str(value)
+
+
 def print_results(data, mode):
     if mode == "json":
-        print(json.dumps(data, indent=2, default=str))
+        print(json.dumps(data, indent=2, default=_json_default))
         return
 
     tw = 68  # total width
@@ -652,12 +659,12 @@ def print_monitor_report(monitoring_data):
     # Anomalies
     anomalies = monitoring_data.get("anomalies", [])
     if anomalies:
-        print(f"\n  {BOLD}{RED}  \u25b6 Detected Anomalies ({len(anomalies)}){RESET}")
+        print(f"\n  {BOLD}{RED}  ▶ Detected Anomalies ({len(anomalies)}){RESET}")
         for a in anomalies:
             sev = _c(a.get('severity', 'LOW'))
             print(f"    {sev} {a.get('detail', '')}")
     else:
-        print(f"\n  {GREEN}  \u2714 No anomalies detected during monitoring{RESET}")
+        print(f"\n  {GREEN}  [OK] No anomalies detected during monitoring{RESET}")
 
     # Summary
     summary = monitoring_data.get("summary", [])

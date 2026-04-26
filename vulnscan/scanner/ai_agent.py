@@ -10,8 +10,12 @@ If neither ``google-genai`` nor ``google-generativeai`` is installed, or the
 ``GEMINI_AVAILABLE = False`` and every public function returns ``None``.
 """
 
-import os
+import hashlib
 import json
+import os
+import random
+import sys
+import time as _time
 
 # ── Lazy / optional Gemini import ────────────────────────────────────
 # Try the new SDK first, fall back to deprecated package
@@ -43,11 +47,45 @@ _GEN_CONFIG = {
     "max_output_tokens": 4096,
 }
 
+_MAX_AI_ATTEMPTS = 3  # initial attempt + up to 2 retries
+_BACKOFF_BASE = 2
+_BACKOFF_MAX = 8
+_BACKOFF_JITTER = 0.5
+_CACHE = {}
+
+
+def _make_cache_key(prompt, model_id=None):
+    key = prompt if model_id is None else f"{model_id}|{prompt}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def _is_rate_limit_error(text):
+    if not text:
+        return False
+    lower = text.lower()
+    return any(token in lower for token in ["429", "resource_exhausted", "rate limit", "quota", "too many requests", "requests exceeded", "try again later"])
+
 
 def _refresh_availability():
-    """Re-check GEMINI_API_KEY (in case load_dotenv ran after initial import)."""
-    global GEMINI_API_KEY, GEMINI_AVAILABLE
+    """Re-check SDK availability and GEMINI_API_KEY (in case load_dotenv ran after initial import)."""
+    global GEMINI_API_KEY, GEMINI_AVAILABLE, _GEMINI_SDK, _USE_NEW_SDK, genai, genai_legacy
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+    if not _GEMINI_SDK:
+        try:
+            from google import genai  # type: ignore
+            _GEMINI_SDK = True
+            _USE_NEW_SDK = True
+            globals()["genai"] = genai
+        except ImportError:
+            try:
+                import google.generativeai as genai_legacy  # type: ignore
+                _GEMINI_SDK = True
+                _USE_NEW_SDK = False
+                globals()["genai_legacy"] = genai_legacy
+            except ImportError:
+                _GEMINI_SDK = False
+
     GEMINI_AVAILABLE = bool(_GEMINI_SDK and GEMINI_API_KEY)
     return GEMINI_AVAILABLE
 
@@ -86,39 +124,38 @@ def _call_gemini_once(prompt, model_id):
 
 def _call_gemini(prompt):
     """Send a prompt to Gemini with retry and model fallback on rate limits."""
-    import time as _time
 
-    # Re-check in case env was loaded after import
     if not GEMINI_AVAILABLE:
         _refresh_availability()
     if not GEMINI_AVAILABLE:
         return None
 
+    cache_key = _make_cache_key(prompt)
+    if cache_key in _CACHE:
+        return _CACHE[cache_key]
+
     models_to_try = [_MODEL_ID] + _FALLBACK_MODELS
 
     for model_id in models_to_try:
-        for attempt in range(3):
+        for attempt in range(_MAX_AI_ATTEMPTS):
+            if attempt > 0:
+                wait = min(_BACKOFF_BASE ** attempt, _BACKOFF_MAX) + random.random() * _BACKOFF_JITTER
+                _time.sleep(wait)
+
             try:
-                return _call_gemini_once(prompt, model_id)
+                text = _call_gemini_once(prompt, model_id)
+                if text:
+                    _CACHE[cache_key] = text
+                    return text
+                break
             except Exception as e:
                 err_str = str(e)
-                is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-
-                if is_rate_limit and attempt < 2:
-                    wait = (attempt + 1) * 2
-                    print(f"\033[33m  [AI] Rate limited on {model_id}, "
-                          f"retrying in {wait}s... (attempt {attempt + 1}/3)\033[0m")
-                    _time.sleep(wait)
+                if _is_rate_limit_error(err_str) and attempt < _MAX_AI_ATTEMPTS - 1:
                     continue
-                elif is_rate_limit:
-                    print(f"\033[33m  [AI] Rate limit on {model_id}, "
-                          f"trying fallback model...\033[0m")
-                    break  # Try next model
-                else:
-                    print(f"\033[33m  [AI] Gemini error ({model_id}): {e}\033[0m")
-                    return None
+                if _is_rate_limit_error(err_str):
+                    break
+                break
 
-    print("\033[33m  [AI] All models rate-limited. Try again later.\033[0m")
     return None
 
 
@@ -136,7 +173,120 @@ def _safe_json(text):
                     return json.loads(text[start:end])
                 except json.JSONDecodeError:
                     pass
+    return None
+
+
+def _vuln_ai_fallback(reason="AI unavailable"):
+    return {
+        "severity": "INFO",
+        "finding": "AI unavailable",
+        "reason": reason,
+        "recommendation": "Retry later",
+        "mitigation": {
+            "summary": "Apply patches and secure exposed services.",
+            "steps": ["Update software", "Close unused ports"],
+        },
+    }
+
+
+def _build_vulnerability_prompt(vuln, host=None, port=None, behavior_data=None, monitoring_data=None):
+    host_context = {
+        "ip": host.get("ip") if isinstance(host, dict) else None,
+        "open_port": port.get("port") if isinstance(port, dict) else None,
+        "service": port.get("service") if isinstance(port, dict) else None,
+        "version": port.get("version") if isinstance(port, dict) else None,
+        "banner": (port.get("banner") or "")[:200] if isinstance(port, dict) else None,
+    }
+    vuln_context = {
+        "cve_id": vuln.get("cve_id"),
+        "severity": vuln.get("severity"),
+        "cvss_score": vuln.get("cvss_score"),
+        "cwe": vuln.get("cwe"),
+        "description": vuln.get("description"),
+        "published": vuln.get("published"),
+    }
+
+    context_obj = {
+        "host": host_context,
+        "vulnerability": vuln_context,
+    }
+
+    if behavior_data:
+        context_obj["behavior_summary"] = {
+            "risk_score": behavior_data.get("risk_score"),
+            "risk_level": behavior_data.get("risk_level"),
+            "findings": [f.get("title") for f in behavior_data.get("findings", []) if isinstance(f, dict)],
+        }
+
+    if monitoring_data:
+        context_obj["monitoring_summary"] = {
+            "duration_secs": monitoring_data.get("duration_secs"),
+            "total_rounds": monitoring_data.get("total_rounds"),
+            "summary": monitoring_data.get("summary", []),
+        }
+
+    context = json.dumps(context_obj, indent=2)
+    return f"""You are an expert cybersecurity analyst. Analyze the vulnerability below and provide a structured JSON response.
+
+CONTEXT:
+{context}
+
+Respond with JSON only, no markdown, no explanation, and no surrounding text. The JSON object must contain exactly these keys:
+{{
+  "severity": "",              // CRITICAL/HIGH/MEDIUM/LOW/INFO
+  "finding": "",               // short finding title
+  "reason": "",                // why this vulnerability is important
+  "recommendation": "",        // what to fix or investigate
+  "mitigation": {{
+    "summary": "",
+    "steps": []
+  }}
+}}
+
+Rules:
+- Return JSON only. Do not include any extra prose.
+- Use the CVE description and host context to provide accurate remediation.
+- Provide concrete mitigation steps, not generic phrases.
+- If the AI cannot produce detailed output, return a valid JSON fallback object.
+"""
+
+
+def _normalize_vuln_ai_output(parsed):
+    if not isinstance(parsed, dict):
         return None
+    mitigation = parsed.get("mitigation") or {}
+    if not isinstance(mitigation, dict):
+        mitigation = {"summary": str(mitigation), "steps": []}
+
+    return {
+        "severity": str(parsed.get("severity") or "INFO").upper(),
+        "finding": str(parsed.get("finding") or parsed.get("title") or "AI unavailable"),
+        "reason": str(parsed.get("reason") or parsed.get("explanation") or "AI did not return a reason."),
+        "recommendation": str(parsed.get("recommendation") or parsed.get("fix") or "Retry later."),
+        "mitigation": {
+            "summary": str(mitigation.get("summary") or mitigation.get("text") or "Apply patches and secure services."),
+            "steps": [str(step) for step in mitigation.get("steps") or mitigation.get("actions") or [] if step],
+        },
+    }
+
+
+def generate_vulnerability_ai(vuln, host=None, port=None, behavior_data=None, monitoring_data=None, delay_seconds=1):
+    if not GEMINI_AVAILABLE:
+        return _vuln_ai_fallback("Gemini unavailable")
+
+    prompt = _build_vulnerability_prompt(vuln, host=host, port=port, behavior_data=behavior_data, monitoring_data=monitoring_data)
+    text = _call_gemini(prompt)
+    parsed = _safe_json(text)
+    if parsed:
+        normalized = _normalize_vuln_ai_output(parsed)
+        if normalized and normalized.get("finding") and normalized.get("mitigation"):
+            if delay_seconds and delay_seconds > 0:
+                _time.sleep(delay_seconds)
+            return normalized
+
+    if delay_seconds and delay_seconds > 0:
+        _time.sleep(delay_seconds)
+    return _vuln_ai_fallback("Rate limited or API failed")
 
 
 # =====================================================================
@@ -376,6 +526,7 @@ def analyze_vulnerabilities(scan_data, behavior_data, monitoring_data=None):
         Parsed JSON with keys: overall_risk_summary, cve_mitigations,
         exploit_chains, priority_actions.  ``None`` if Gemini unavailable.
     """
+    _refresh_availability()
     if not GEMINI_AVAILABLE:
         return None
 
@@ -396,6 +547,7 @@ def analyze_network_behavior(behavior_data, packet_data=None):
         Parsed JSON with keys: anomaly_assessment, firewall_detection,
         ids_ips_detection, honeypot_indicators, zero_day_risks.
     """
+    _refresh_availability()
     if not GEMINI_AVAILABLE:
         return None
 
@@ -416,6 +568,7 @@ def assess_zero_day_risk(host_profile, findings, packet_patterns=None):
         Parsed JSON with keys: risk_level, confidence, assessment_summary,
         suspicious_indicators, potential_attack_vectors, recommended_monitoring.
     """
+    _refresh_availability()
     if not GEMINI_AVAILABLE:
         return None
 

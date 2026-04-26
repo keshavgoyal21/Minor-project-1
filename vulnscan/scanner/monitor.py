@@ -27,7 +27,7 @@ def _probe_port(ip, port, timeout=3):
         return None
 
 
-def monitor_target(ip, ports, duration=30, interval=5):
+def monitor_target(ip, ports, duration=30, interval=5, stop_requested=None):
     """Probe target ports repeatedly over *duration* seconds.
 
     Parameters
@@ -40,6 +40,8 @@ def monitor_target(ip, ports, duration=30, interval=5):
         Total monitoring time in seconds.
     interval : int
         Seconds between probe rounds.
+    stop_requested : callable | None
+        Optional stop-check callback.
 
     Returns
     -------
@@ -50,10 +52,15 @@ def monitor_target(ip, ports, duration=30, interval=5):
     round_num = 0
 
     while (time.time() - start_time) < duration:
+        if stop_requested and callable(stop_requested) and stop_requested():
+            break
+
         round_num += 1
         round_data = {"round": round_num, "timestamp": time.time(), "probes": {}}
 
         for port in ports:
+            if stop_requested and callable(stop_requested) and stop_requested():
+                break
             latency = _probe_port(ip, port)
             round_data["probes"][port] = {
                 "latency_ms": latency,
@@ -62,14 +69,18 @@ def monitor_target(ip, ports, duration=30, interval=5):
 
         rounds.append(round_data)
 
-        # Wait for next round (but don't exceed duration)
         remaining = duration - (time.time() - start_time)
-        if remaining > interval:
-            time.sleep(interval)
-        elif remaining > 0:
-            time.sleep(remaining)
+        if remaining <= 0:
             break
-        else:
+
+        sleep_target = min(interval, remaining)
+        slept = 0.0
+        while slept < sleep_target:
+            if stop_requested and callable(stop_requested) and stop_requested():
+                break
+            time.sleep(min(0.5, sleep_target - slept))
+            slept += min(0.5, sleep_target - slept)
+        if stop_requested and callable(stop_requested) and stop_requested():
             break
 
     # ── Aggregate per-port statistics ────────────────────────────────
