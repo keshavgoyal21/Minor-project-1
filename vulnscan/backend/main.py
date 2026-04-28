@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import time
@@ -226,6 +227,22 @@ def _clear_scan_state():
 def _serialize_scan_result(data: Any) -> Any:
     return _make_serializable(data)
 
+_ANSI_RE = re.compile(r'\033\[[0-9;]*m|\033\][^\a]*\a')
+_SPINNER_FRAMES = frozenset('|/-\\')
+
+
+def _clean_ws_line(raw: str) -> str:
+    """Strip ANSI codes and return the last non-empty \\r segment (handles spinner)."""
+    no_ansi = _ANSI_RE.sub('', raw)
+    parts = [p.strip() for p in no_ansi.split('\r') if p.strip()]
+    if not parts:
+        return ''
+    last = parts[-1]
+    # Discard pure spinner frames like |, /, -, \
+    if last in _SPINNER_FRAMES:
+        return ''
+    return last
+
 
 class WebSocketWriter:
     def __init__(self, manager, loop, original_stdout):
@@ -233,6 +250,12 @@ class WebSocketWriter:
         self.loop = loop
         self.original = original_stdout
         self._buffer = ""
+
+    def _emit(self, raw: str):
+        clean = _clean_ws_line(raw)
+        if clean:
+            self.manager.broadcast_from_thread(
+                json.dumps({"type": "log", "message": clean}), self.loop)
 
     def write(self, text: str):
         if self.original:
@@ -243,9 +266,7 @@ class WebSocketWriter:
         self._buffer += text
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
-            clean = line.strip()
-            if clean:
-                self.manager.broadcast_from_thread(json.dumps({"type": "log", "message": clean}), self.loop)
+            self._emit(line)
 
     def flush(self):
         if self.original:
@@ -254,10 +275,9 @@ class WebSocketWriter:
             except Exception:
                 pass
         if self._buffer.strip():
-            clean = self._buffer.strip()
-            if clean:
-                self.manager.broadcast_from_thread(json.dumps({"type": "log", "message": clean}), self.loop)
+            self._emit(self._buffer)
             self._buffer = ""
+
 
 
 class ScanRequest(BaseModel):
@@ -326,6 +346,9 @@ async def start_scan(request: ScanRequest):
 
     def _scan_thread():
         results = None
+        original_stdout = sys.stdout
+        ws_writer = WebSocketWriter(manager, loop, original_stdout)
+        sys.stdout = ws_writer
         try:
             logger.info(f"Scan started at {datetime.utcnow().isoformat()}")
             results = vulnscanner.run_scan(
@@ -349,6 +372,7 @@ async def start_scan(request: ScanRequest):
             scan_state["last_error"] = str(exc)
             logger.exception("Scan failed")
         finally:
+            sys.stdout = original_stdout  # always restore stdout
             if results is not None:
                 payload = _serialize_scan_result(results)
                 response_payload = {

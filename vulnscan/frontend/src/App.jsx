@@ -9,7 +9,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 
-const COLORS = ['#00ff41', '#00d0ff', '#ff003c', '#a855f7', '#f59e0b'];
+const COLORS = ['#FF4D4F', '#FF8C42', '#F5C542', '#3B82F6', '#A0A0A0'];
 
 const cleanANSI = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
 
@@ -23,11 +23,11 @@ const renderValue = (value) => {
 
 const getSeverityColor = (severity) => {
   switch (severity?.toUpperCase()) {
-    case 'CRITICAL': return '#a855f7';
-    case 'HIGH': return '#ff003c';
-    case 'MEDIUM': return '#f59e0b';
-    case 'LOW': return '#60a5fa';
-    default: return '#6b7280';
+    case 'CRITICAL': return '#FF4D4F';
+    case 'HIGH': return '#FF8C42';
+    case 'MEDIUM': return '#F5C542';
+    case 'LOW': return '#3B82F6';
+    default: return '#6B7280';
   }
 };
 
@@ -121,13 +121,18 @@ function App() {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'log') {
-          return; // Ignore backend log traffic for clean UI
+          const clean = cleanANSI(data.message || '').trim();
+          if (clean) {
+            setLogs(prev => [...prev, { text: clean, ts: Date.now() }]);
+          }
+          return;
         }
         if (data.type === 'step') {
           const payload = data.payload || {};
           setScanSteps(prev => ({ ...prev, [payload.step]: payload.status }));
           return;
         }
+
         if (data.type === 'results') {
           const payload = data.payload || data.data || {};
           const scanResult = payload.scan_results || payload.data || payload;
@@ -142,14 +147,16 @@ function App() {
           setScanState(payload.status === 'success' ? 'completed' : (payload.status === 'error' ? 'error' : (mergedResult?.stopped ? 'stopped' : 'completed')));
           clearInterval(timerRef.current);
           if (scanResult) {
+            // Save mergedResult (with AI fields) not the raw scanResult so history is complete
             const entry = {
               id: Date.now(),
-              target: scanResult.target || 'Unknown',
+              target: mergedResult.target || scanResult.target || 'Unknown',
               time: new Date().toLocaleString(),
-              openPorts: scanResult.hosts?.[0]?.open_ports?.length || scanResult.ports?.length || 0,
-              cveCount: scanResult.hosts?.flatMap(h => h.open_ports?.flatMap(p => p.vulnerabilities || []) || []).length || scanResult.vulnerabilities?.length || 0,
-              riskScore: scanResult.behavior_results?.host_profiles?.[0]?.risk_score ?? scanResult.behavior?.risk_score ?? null,
-              data: scanResult,
+              outputMode: outputMode,  // save which mode was active
+              openPorts: mergedResult.hosts?.[0]?.open_ports?.length || mergedResult.ports?.length || 0,
+              cveCount: mergedResult.hosts?.flatMap(h => (h.open_ports || []).flatMap(p => p.vulnerabilities || [])).length || mergedResult.vulnerabilities?.length || 0,
+              riskScore: mergedResult.behavior_results?.host_profiles?.[0]?.risk_score ?? mergedResult.behavior?.risk_score ?? null,
+              data: mergedResult,  // full merged data including AI fields
             };
             setScanHistory(prev => {
               const updated = [entry, ...prev].slice(0, 20);
@@ -253,7 +260,13 @@ function App() {
 
   const displayResults = activeTab === 'history' && selectedHistoryItem ? selectedHistoryItem.data : results;
   const scanHosts = displayResults?.hosts || [];
-  const allCves = displayResults?.vulnerabilities || scanHosts.flatMap(h => h.open_ports?.flatMap(p => p.vulnerabilities || []) || []) || [];
+  // Inject port number into each CVE so the table can display it
+  const allCves = displayResults?.vulnerabilities ||
+    scanHosts.flatMap(h =>
+      (h.open_ports || []).flatMap(p =>
+        (p.vulnerabilities || []).map(v => ({ ...v, port: v.port ?? p.port }))
+      )
+    ) || [];
   const openPortsData = (scanHosts[0]?.open_ports || displayResults?.ports || []).map(p => ({ name: `${p.port}/${p.service || p.protocol || 'tcp'}`, value: 1 })) || [];
   const displayCves = displayResults?.vulnerabilities || scanHosts.flatMap(h => h.open_ports?.flatMap(p => p.vulnerabilities || []) || []) || [];
   const displayPortsData = (scanHosts[0]?.open_ports || displayResults?.ports || []).map(p => ({ name: `${p.port}/${p.service || p.protocol || 'tcp'}`, value: 1 })) || [];  const TAB_ITEMS = [
@@ -269,23 +282,23 @@ function App() {
         {/* Logo + WS indicator */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Shield style={{ color: '#00ff41', width: 26, height: 26 }} />
-            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#fff', letterSpacing: 3, fontFamily: 'inherit' }}>
-              VULN<span style={{ color: '#00ff41' }}>SCAN</span>
+            <Shield style={{ color: '#3B82F6', width: 26, height: 26 }} />
+            <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#FFFFFF', letterSpacing: 3, fontFamily: 'inherit' }}>
+              VULN<span style={{ color: '#3B82F6' }}>SCAN</span>
             </h1>
           </div>
-          <div className="ui-live-status" style={{ fontSize: 10, color: wsConnected ? '#00ff41' : '#ff6b6b' }}>
+          <div className="ui-live-status" style={{ fontSize: 10, color: wsConnected ? '#3B82F6' : '#FF4D4F' }}>
             <div className="ui-live-dot" />
-            <span style={{ color: wsConnected ? '#00ff41' : '#ff6b6b' }}>{wsConnected ? 'LIVE' : 'OFF'}</span>
+            <span style={{ color: wsConnected ? '#3B82F6' : '#FF4D4F' }}>{wsConnected ? 'LIVE' : 'OFF'}</span>
           </div>
         </div>
 
         {/* ── API Status Panel ── */}
-        <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 8, padding: '12px 14px', marginBottom: 20, border: '1px solid rgba(75,85,99,0.4)' }}>
+        <div style={{ background: 'rgba(0,0,0,0.5)', borderRadius: 8, padding: '12px 14px', marginBottom: 20, border: '1px solid rgba(42,42,42,0.9)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 2 }}>API Status</span>
-            <button onClick={refreshApiStatus} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4b5563', padding: 2 }} title="Refresh status">
-              <RefreshCw size={12} style={{ color: apiStatusLoading ? '#00ff41' : '#6b7280' }} className={apiStatusLoading ? 'animate-spin' : ''} />
+            <span style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 2 }}>API Status</span>
+            <button onClick={refreshApiStatus} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 2 }} title="Refresh status">
+              <RefreshCw size={12} style={{ color: apiStatusLoading ? '#3B82F6' : '#6B7280' }} className={apiStatusLoading ? 'animate-spin' : ''} />
             </button>
           </div>
           {Object.entries(API_LABELS).map(([key, { label, icon: Icon }]) => {
@@ -295,19 +308,19 @@ function App() {
                 {/* Checkbox */}
                 <div style={{
                   width: 15, height: 15, borderRadius: 3, flexShrink: 0,
-                  border: `1.5px solid ${connected ? '#00ff41' : '#4b5563'}`,
-                  background: connected ? 'rgba(0,255,65,0.18)' : 'transparent',
+                  border: `1.5px solid ${connected ? '#3B82F6' : '#6B7280'}`,
+                  background: connected ? 'rgba(59,130,246,0.18)' : 'transparent',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   transition: 'all 0.3s'
                 }}>
-                  {connected && <Check size={9} style={{ color: '#00ff41' }} />}
+                  {connected && <Check size={9} style={{ color: '#3B82F6' }} />}
                 </div>
-                <Icon size={12} style={{ color: connected ? '#00ff41' : '#4b5563', flexShrink: 0 }} />
-                <span style={{ fontSize: 11, color: connected ? '#d1d5db' : '#4b5563', flex: 1 }}>{label}</span>
+                <Icon size={12} style={{ color: connected ? '#3B82F6' : '#6B7280', flexShrink: 0 }} />
+                <span style={{ fontSize: 11, color: connected ? '#A0A0A0' : '#6B7280', flex: 1 }}>{label}</span>
                 <span style={{
                   fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase',
-                  color: connected ? '#00ff41' : '#6b7280',
-                  background: connected ? 'rgba(0,255,65,0.12)' : 'rgba(75,85,99,0.2)',
+                  color: connected ? '#3B82F6' : '#6B7280',
+                  background: connected ? 'rgba(59,130,246,0.12)' : 'rgba(42,42,42,0.8)',
                   padding: '2px 5px', borderRadius: 3,
                 }}>{connected ? 'OK' : 'N/A'}</span>
               </div>
@@ -320,7 +333,7 @@ function App() {
 
           {/* Target */}
           <div>
-            <label style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 2 }}>Target</label>
+            <label style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 2 }}>Target</label>
             <input
               className="ui-input"
               value={target} onChange={e => setTarget(e.target.value)}
@@ -331,7 +344,7 @@ function App() {
 
           {/* Ports */}
           <div>
-            <label style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 2 }}>Ports</label>
+            <label style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 2 }}>Ports</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8, marginBottom: 6 }}>
               {PORT_PRESETS.map(preset => (
                 <button key={preset.label} onClick={() => setPorts(preset.value)} className={`ui-ports-btn ${ports === preset.value ? 'active' : ''}`} style={{ padding: '4px 9px', fontSize: 11, cursor: 'pointer' }}>
@@ -348,8 +361,8 @@ function App() {
           {/* Max CVEs */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <label style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 2 }}>Max CVEs / Port</label>
-              <span style={{ fontSize: 11, color: '#00ff41', fontWeight: 700 }}>{numCves}</span>
+              <label style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 2 }}>Max CVEs / Port</label>
+              <span style={{ fontSize: 11, color: '#3B82F6', fontWeight: 700 }}>{numCves}</span>
             </div>
             <input type="range" min={1} max={20} value={numCves} onChange={e => setNumCves(e.target.value)}
               className="ui-range" style={{ width: '100%', marginTop: 8, cursor: 'pointer' }} />
@@ -357,7 +370,7 @@ function App() {
 
           {/* Output Format */}
           <div>
-            <label style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 2 }}>Output Format</label>
+            <label style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 2 }}>Output Format</label>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               {['text', 'json'].map(mode => (
                 <button key={mode} onClick={() => setOutputMode(mode)} className={`ui-btn ui-output-toggle ${outputMode === mode ? 'active' : ''}`} style={{ flex: 1, padding: '6px 0', fontSize: 12, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 1 }}>
@@ -369,7 +382,7 @@ function App() {
 
           {/* PCAP Path */}
           <div>
-            <label style={{ fontSize: 10, color: '#6b7280', textTransform: 'uppercase', letterSpacing: 2 }}>PCAP File Path</label>
+            <label style={{ fontSize: 10, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 2 }}>PCAP File Path</label>
             <input value={pcapPath} onChange={e => setPcapPath(e.target.value)}
               className="ui-input"
               style={{ width: '100%', padding: '8px 10px', fontSize: 12, marginTop: 6, boxSizing: 'border-box' }}
@@ -379,12 +392,12 @@ function App() {
           {/* AI Toggle */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Brain size={13} style={{ color: aiEnabled ? '#00d0ff' : '#4b5563' }} />
-              <span style={{ fontSize: 13, color: aiEnabled ? '#d1d5db' : '#6b7280' }}>AI Agent</span>
-              {!apiStatus.gemini_ai && <span style={{ fontSize: 9, color: '#f59e0b', background: 'rgba(245,158,11,0.12)', padding: '1px 5px', borderRadius: 3, letterSpacing: 1 }}>NO KEY</span>}
+              <Brain size={13} style={{ color: aiEnabled ? '#3B82F6' : '#6B7280' }} />
+              <span style={{ fontSize: 13, color: aiEnabled ? '#A0A0A0' : '#6B7280' }}>AI Agent</span>
+              {!apiStatus.gemini_ai && <span style={{ fontSize: 9, color: '#FF8C42', background: 'rgba(255,140,66,0.16)', padding: '1px 5px', borderRadius: 3, letterSpacing: 1 }}>NO KEY</span>}
             </div>
             <div className="ui-toggle-switch" onClick={() => setAiEnabled(!aiEnabled)}
-              style={{ width: 44, height: 22, borderRadius: 11, position: 'relative', cursor: 'pointer', transition: 'background 0.3s', background: aiEnabled ? 'rgba(0,255,65,0.18)' : '#1b2430' }}>
+              style={{ width: 44, height: 22, borderRadius: 11, position: 'relative', cursor: 'pointer', transition: 'background 0.3s', background: aiEnabled ? 'rgba(59,130,246,0.18)' : '#121212' }}>
               <div className="ui-toggle-thumb" style={{ left: aiEnabled ? 25 : 3 }} />
             </div>
           </div>
@@ -434,10 +447,10 @@ function App() {
         {/* Header bar */}
         <div className="glass-card ui-header-card" style={{ padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Terminal size={16} style={{ color: '#00ff41' }} />
-            <span className="ui-terminal-title" style={{ fontSize: 13, color: '#00ff41' }}>
+            <Terminal size={16} style={{ color: '#3B82F6' }} />
+            <span className="ui-terminal-title" style={{ fontSize: 13, color: '#3B82F6' }}>
               API-Driven Vulnerability Intelligence Engine //&nbsp;
-              <span style={{ color: isScanning || scanState === 'stopping' ? '#00ff41' : '#6b7280' }}>
+              <span style={{ color: isScanning || scanState === 'stopping' ? '#3B82F6' : '#6B7280' }}>
                 {scanState === 'running' ? `● SCANNING (${elapsed}s)`
                   : scanState === 'stopping' ? '● STOPPING'
                   : scanState === 'stopped' ? '○ STOPPED'
@@ -473,15 +486,15 @@ function App() {
             <AnimatePresence>
               {isScanning && (
                 <motion.div className="glass-card" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ padding: 18, flexShrink: 0 }}>
-                  <h3 style={{ color: '#00ff41', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                  <h3 style={{ color: '#3B82F6', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
                     <Activity size={14} className="animate-spin" /> Live Scan Stream
-                    <span style={{ marginLeft: 'auto', fontSize: 11, color: '#6b7280', fontWeight: 400 }}>{elapsed}s elapsed</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 11, color: '#6B7280', fontWeight: 400 }}>{elapsed}s elapsed</span>
                   </h3>
                   {Object.keys(scanSteps).length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12, fontSize: 12, color: '#d1d5db' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12, fontSize: 12, color: '#A0A0A0' }}>
                       {Object.entries(scanSteps).map(([step, status]) => (
                         <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ color: status === 'done' ? '#00ff41' : '#f59e0b' }}>
+                          <span style={{ color: status === 'done' ? '#3B82F6' : '#FF8C42' }}>
                             {status === 'done' ? '✔' : '●'}
                           </span>
                           <span>{step} — {status}</span>
@@ -489,10 +502,10 @@ function App() {
                       ))}
                     </div>
                   )}
-                  <div style={{ background: '#081014', borderRadius: 10, padding: 14, height: 180, overflowY: 'auto', fontSize: 12 }}>
-                    {logs.length === 0 && <p style={{ color: '#4b5563', margin: 0 }}>Connecting to backend... (this may take a few seconds)</p>}
+                  <div style={{ background: '#121212', borderRadius: 10, padding: 14, height: 180, overflowY: 'auto', fontSize: 12 }}>
+                    {logs.length === 0 && <p style={{ color: '#6B7280', margin: 0 }}>Connecting to backend... (this may take a few seconds)</p>}
                     {logs.map((log, i) => (
-                      <div key={i} style={{ color: log.text.startsWith('❌') ? '#ef4444' : log.text.startsWith('✅') ? '#00ff41' : '#a3e635', marginBottom: 3 }}>
+                      <div key={i} style={{ color: log.text.startsWith('❌') ? '#FF4D4F' : log.text.startsWith('✅') ? '#3B82F6' : '#A0A0A0', marginBottom: 3 }}>
                         &gt; {log.text}
                       </div>
                     ))}
@@ -506,17 +519,22 @@ function App() {
             <AnimatePresence>
               {results && !isScanning && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <ResultsDashboard results={results} allCves={allCves} openPortsData={openPortsData} expandedCve={expandedCve} setExpandedCve={setExpandedCve} />
+                  {outputMode === 'json' ? (
+                    <JsonOutputView results={results} />
+                  ) : (
+                    <ResultsDashboard results={results} allCves={allCves} openPortsData={openPortsData} expandedCve={expandedCve} setExpandedCve={setExpandedCve} />
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
 
+
             {/* Empty state */}
             {!isScanning && !results && (
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, color: '#334155', minHeight: 300 }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, color: '#6B7280', minHeight: 300 }}>
                 <Shield size={72} />
                 <p style={{ fontSize: 14, letterSpacing: 2, margin: 0 }}>CONFIGURE A TARGET AND START A SCAN</p>
-                <p style={{ fontSize: 11, color: '#1e3a5f', margin: 0 }}>Make sure the backend is running on localhost:8000</p>
+                <p style={{ fontSize: 11, color: '#6B7280', margin: 0 }}>Make sure the backend is running on localhost:8000</p>
               </div>
             )}
           </>
@@ -538,6 +556,81 @@ function App() {
   );
 }
 
+// ── JSON Output View ──────────────────────────────────────────────────
+function JsonOutputView({ results }) {
+  const [copied, setCopied] = React.useState(false);
+  const jsonStr = JSON.stringify(results, null, 2);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(jsonStr).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleDownload = () => {
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vulnscan-${results?.hosts?.[0]?.ip || 'result'}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Simple syntax highlighting
+  const highlighted = jsonStr.replace(
+    /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+    (match) => {
+      if (/^"/.test(match)) {
+        if (/:$/.test(match)) return `<span style="color:#60a5fa">${match}</span>`; // key → blue
+        return `<span style="color:#4ade80">${match}</span>`; // string → green
+      }
+      if (/true|false/.test(match)) return `<span style="color:#fbbf24">${match}</span>`; // boolean → yellow
+      if (/null/.test(match)) return `<span style="color:#f87171">${match}</span>`; // null → red
+      return `<span style="color:#67e8f9">${match}</span>`; // number → cyan
+    }
+  );
+
+  return (
+    <div className="glass-card" style={{ padding: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <h3 style={{ margin: 0, color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+          <Terminal size={14} style={{ color: '#00ff41' }} /> JSON Output
+        </h3>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={handleCopy} style={{
+            background: copied ? 'rgba(0,255,65,0.15)' : 'rgba(255,255,255,0.07)',
+            border: `1px solid ${copied ? '#00ff41' : 'rgba(255,255,255,0.12)'}`,
+            color: copied ? '#00ff41' : '#d1d5db', borderRadius: 6,
+            padding: '5px 12px', fontSize: 11, cursor: 'pointer', letterSpacing: 1,
+          }}>
+            {copied ? '✔ Copied' : 'Copy'}
+          </button>
+          <button onClick={handleDownload} style={{
+            background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
+            color: '#60a5fa', borderRadius: 6, padding: '5px 12px',
+            fontSize: 11, cursor: 'pointer', letterSpacing: 1,
+          }}>
+            ↓ Download .json
+          </button>
+        </div>
+      </div>
+      <pre
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+        style={{
+          margin: 0, padding: 16, background: '#060d12',
+          borderRadius: 8, border: '1px solid rgba(0,255,65,0.12)',
+          fontSize: 12, lineHeight: 1.6, color: '#e2e8f0',
+          overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh',
+          fontFamily: '"Fira Code", "JetBrains Mono", monospace',
+          whiteSpace: 'pre',
+        }}
+      />
+    </div>
+  );
+}
+
 // ── Results Dashboard component ───────────────────────────────────────
 function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExpandedCve }) {
   if (!results) return null;
@@ -548,13 +641,16 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
   const aiChainMeta = results.ai_chain || aiData?.vulnerability_intel || {};
 
   const openPorts = results.hosts?.[0]?.open_ports || results.ports || [];
-  const exploitRows = allCves.flatMap((cve, idx) => (cve.exploits || []).map((ex, ei) => ({
-    id: `${cve.cve_id}-${ei}-${idx}`,
-    cve_id: cve.cve_id,
-    title: ex.description || ex.title || `Exploit ${ex.edb_id}`,
-    link: ex.exploit_url || ex.url || '#',
-    severity: cve.severity || 'UNKNOWN',
-  })));
+  const exploitRows = allCves.flatMap((cve, idx) =>
+    (cve.exploits || []).map((ex, ei) => ({
+      id: `${cve.cve_id}-${ei}-${idx}`,
+      cve_id: cve.cve_id,
+      port: cve.port ?? '-',
+      title: ex.description || ex.title || (ex.edb_id ? `EDB-${ex.edb_id}` : 'Unknown exploit'),
+      link: ex.exploit_url || ex.url || (ex.edb_id ? `https://www.exploit-db.com/exploits/${ex.edb_id}` : '#'),
+      severity: cve.severity || 'UNKNOWN',
+    }))
+  );
 
   const aiAnalysisItems = Array.isArray(results.ai_analysis_items)
     ? results.ai_analysis_items
@@ -563,71 +659,120 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
   return (
     <>
       {/* Row 1 */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 14 }}>
         {/* Target Info */}
-        <div className="glass-card" style={{ padding: 22, borderLeft: '3px solid #00ff41' }}>
-          <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontFamily: 'inherit' }}><Server size={14} /> Target Info</h3>
-          <p style={{ margin: '0 0 6px', fontSize: 13, fontFamily: 'inherit' }}>IP: <strong style={{ color: '#fff' }}>{results.hosts?.[0]?.ip}</strong></p>
-          <p style={{ margin: '0 0 6px', fontSize: 13, fontFamily: 'inherit' }}>Scan Time: <strong style={{ color: '#fff', fontSize: 11 }}>{results.scan_time}</strong></p>
-          <p style={{ margin: '0 0 16px', fontSize: 13, fontFamily: 'inherit' }}>Open Ports: <strong style={{ color: '#00ff41', fontSize: 18 }}>{openPorts.length}</strong></p>
-          {results.analysis && (
-            <p style={{ margin: '0 0 8px', fontSize: 12, lineHeight: 1.5, color: '#cbd5e1' }}><strong>AI Summary:</strong> {renderValue(results.analysis)}</p>
-          )}
-          {results.mitigation && (
-            <p style={{ margin: '0 0 16px', fontSize: 12, lineHeight: 1.5, color: '#a5f3fc' }}><strong>Recommended Mitigation:</strong> {renderValue(results.mitigation)}</p>
-          )}
-          <div style={{ minHeight: 160, height: 160 }}>
-            {openPortsData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={160}>
-                <PieChart>
-                  <Pie data={openPortsData} cx="50%" cy="50%" innerRadius={32} outerRadius={50} dataKey="value" label={({ name }) => name}>
-                    {openPortsData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip contentStyle={{ background: '#0d1117', border: '1px solid rgba(0,255,65,0.16)', fontSize: 12, color: '#d1d5db' }} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6b7280', fontSize: 12 }}>
-                No port chart data available.
-              </div>
-            )}
+        <div className="glass-card" style={{ padding: 22 }}>
+          <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontFamily: 'inherit' }}><Server size={14} /> Target Info</h3>
+
+          {/* Two-column layout: text left, chart right */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 24 }}>
+
+            {/* Left: scan details */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ margin: '0 0 6px', fontSize: 13, fontFamily: 'inherit' }}>IP: <strong style={{ color: '#FFFFFF' }}>{results.hosts?.[0]?.ip}</strong></p>
+              <p style={{ margin: '0 0 6px', fontSize: 13, fontFamily: 'inherit' }}>Scan Time: <strong style={{ color: '#FFFFFF', fontSize: 11 }}>{results.scan_time}</strong></p>
+              <p style={{ margin: '0 0 16px', fontSize: 13, fontFamily: 'inherit' }}>Open Ports: <strong style={{ color: '#00ff41', fontSize: 22 }}>{openPorts.length}</strong></p>
+              {results.analysis && (
+                <p style={{ margin: '0 0 8px', fontSize: 12, lineHeight: 1.5, color: '#A0A0A0' }}><strong>AI Summary:</strong> {renderValue(results.analysis)}</p>
+              )}
+              {results.mitigation && (
+                <p style={{ margin: '0 0 0', fontSize: 12, lineHeight: 1.5, color: '#A0A0A0' }}><strong>Recommended Mitigation:</strong> {renderValue(results.mitigation)}</p>
+              )}
+            </div>
+
+            {/* Right: donut chart + port legend */}
+            <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+              {openPortsData.length > 0 ? (
+                <>
+                  <ResponsiveContainer width={200} height={200}>
+                    <PieChart>
+                      <Pie
+                        data={openPortsData}
+                        cx="50%" cy="50%"
+                        innerRadius={52} outerRadius={78}
+                        stroke="none" strokeWidth={0}
+                        dataKey="value"
+                      >
+                        {openPortsData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                      </Pie>
+                      <Tooltip contentStyle={{ background: '#1A1A1A', border: '1px solid #2A2A2A', borderRadius: 8, fontSize: 12, color: '#FFFFFF' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {/* Port labels below chart */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', justifyContent: 'center', maxWidth: 200 }}>
+                    {openPortsData.map((entry, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#d1d5db' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: COLORS[i % COLORS.length], flexShrink: 0, display: 'inline-block' }} />
+                        {entry.name}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 200, height: 200, color: '#6B7280', fontSize: 12 }}>
+                  No port data available.
+                </div>
+              )}
+            </div>
+
           </div>
         </div>
 
         {/* Behavior Analysis */}
-        <div className="glass-card" style={{ padding: 22 }}>
-          <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Activity size={14} /> Behavior Analysis</h3>
-          {behaviorProfiles.map((prof, i) => (
-            <div key={i} style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span style={{ fontSize: 13, color: '#d1d5db' }}>Risk Score</span>
-                <span style={{ color: prof.risk_score > 70 ? '#ff4d8d' : '#f5c32b', fontWeight: 700 }}>{prof.risk_score}/100 — {prof.risk_level}</span>
-              </div>
-              <div style={{ background: '#081014', borderRadius: 99, height: 8, marginBottom: 18, overflow: 'hidden', border: '1px solid rgba(0,255,65,0.18)' }}>
-                <motion.div initial={{ width: 0 }} animate={{ width: `${prof.risk_score}%` }} transition={{ duration: 1.2, ease: 'easeOut' }}
-                  style={{ height: '100%', borderRadius: 99, background: prof.risk_score > 70 ? 'linear-gradient(90deg, #ff4d8d, #ff003c)' : 'linear-gradient(90deg, #00ff41, #00d0ff)' }} />
-              </div>
-              {prof.findings?.length > 0 && (
-                <div>
-                  <p style={{ fontSize: 10, color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Findings</p>
-                  {prof.findings.map((f, j) => (
-                    <div key={j} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 5, fontSize: 13, color: '#f5c32b' }}>
-                      <AlertTriangle size={13} style={{ color: '#f5c32b', flexShrink: 0, marginTop: 1 }} />
-                      <span>{typeof f === 'string' ? f : f.title || f.reason || JSON.stringify(f)}</span>
-                    </div>
-                  ))}
+        <div className="glass-card ui-behavior-card" style={{ padding: 22 }}>
+          <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Activity size={14} /> Behavior Analysis</h3>
+          {behaviorProfiles.map((prof, i) => {
+            const riskScoreNum = Number(prof.risk_score);
+            const riskScore = Number.isFinite(riskScoreNum)
+              ? Math.max(0, Math.min(100, riskScoreNum))
+              : 0;
+            const riskLevel = prof.risk_level || 'LOW';
+            const highRisk = riskScore > 70;
+
+            return (
+              <div key={i} className="ui-behavior-profile" style={{ marginBottom: 16 }}>
+                <div className="ui-behavior-summary">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, color: '#A0A0A0' }}>Risk Score</span>
+                    <span style={{ color: highRisk ? '#FF4D4F' : '#F5C542', fontWeight: 700 }}>{riskScore}/100 — {riskLevel}</span>
+                  </div>
+                  <div className="progress-bar" style={{ background: '#2A2A2A', borderRadius: 6, height: 6, overflow: 'hidden' }}>
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${riskScore}%` }}
+                      transition={{ duration: 1.2, ease: 'easeOut' }}
+                      className="progress-fill"
+                      style={{ height: '100%', borderRadius: 6, background: highRisk ? '#FF4D4F' : '#3B82F6' }}
+                    />
+                  </div>
                 </div>
-              )}
-            </div>
-          ))}
+
+                <div className="ui-behavior-details-scroll">
+                  {prof.findings?.length > 0 ? (
+                    <div>
+                      <p style={{ fontSize: 10, color: '#6B7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Findings</p>
+                      {prof.findings.map((f, j) => (
+                        <div key={j} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 5, fontSize: 13, color: '#F5C542' }}>
+                          <AlertTriangle size={13} style={{ color: '#F5C542', flexShrink: 0, marginTop: 1 }} />
+                          <span>{typeof f === 'string' ? f : f.title || f.reason || JSON.stringify(f)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ margin: 0, fontSize: 12, color: '#6B7280' }}>No behavior findings available.</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
       {/* Structured result tables */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <div className="glass-card" style={{ padding: 22 }}>
-          <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Server size={14} /> Open Ports</h3>
-          <div style={{ overflowX: 'auto' }}>
+        <div className="glass-card ui-fixed-list-card" style={{ padding: 22 }}>
+          <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Server size={14} /> Open Ports</h3>
+          <div className="ui-fixed-list-scroll">
             <table className="ui-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr>
@@ -638,42 +783,43 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
               </thead>
               <tbody>
                 {openPorts.map((port, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.5)' }}>
+                  <tr key={i} style={{ borderBottom: '1px solid rgba(42,42,42,0.9)' }}>
                     <td style={{ padding: '10px 14px' }}>{port.port}</td>
                     <td style={{ padding: '10px 14px' }}>{port.service || port.protocol || 'tcp'}</td>
-                    <td style={{ padding: '10px 14px', color: '#00ff41' }}>{port.status || 'open'}</td>
+                    <td style={{ padding: '10px 14px', color: '#3B82F6' }}>{port.status || 'open'}</td>
                   </tr>
                 ))}
                 {openPorts.length === 0 && (
-                  <tr><td colSpan={3} style={{ padding: 18, textAlign: 'center', color: '#4b5563' }}>No open ports detected.</td></tr>
+                  <tr><td colSpan={3} style={{ padding: 18, textAlign: 'center', color: '#6B7280' }}>No open ports detected.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="glass-card" style={{ padding: 22 }}>
-          <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Bug size={14} /> Exploits</h3>
-          <div style={{ overflowX: 'auto' }}>
+        <div className="glass-card ui-fixed-list-card" style={{ padding: 22 }}>
+          <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Bug size={14} /> Exploits</h3>
+          <div className="ui-fixed-list-scroll">
             <table className="ui-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontFamily: 'inherit' }}>
               <thead>
                 <tr>
-                  {['CVE', 'Title', 'Severity', 'Link'].map(h => (
+                  {['CVE', 'Port', 'Title', 'Severity', 'Link'].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {exploitRows.map(row => (
-                  <tr key={row.id} style={{ borderBottom: '1px solid rgba(51,65,85,0.5)' }}>
+                  <tr key={row.id} style={{ borderBottom: '1px solid rgba(42,42,42,0.9)' }}>
                     <td style={{ padding: '10px 14px' }}>{row.cve_id}</td>
-                    <td style={{ padding: '10px 14px' }}>{row.title}</td>
+                    <td style={{ padding: '10px 14px', color: '#00ff41' }}>{row.port}</td>
+                    <td style={{ padding: '10px 14px', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.title}>{row.title}</td>
                     <td style={{ padding: '10px 14px' }}><span className={`ui-severity-label ui-severity-label-${row.severity?.toLowerCase()}`}>{row.severity}</span></td>
-                    <td style={{ padding: '10px 14px' }}><a href={row.link} target="_blank" rel="noreferrer" style={{ color: '#38bdf8' }}>Open</a></td>
+                    <td style={{ padding: '10px 14px' }}><a href={row.link} target="_blank" rel="noreferrer" style={{ color: '#3B82F6' }}>Open ↗</a></td>
                   </tr>
                 ))}
                 {exploitRows.length === 0 && (
-                  <tr><td colSpan={4} style={{ padding: 18, textAlign: 'center', color: '#4b5563' }}>No exploit data found.</td></tr>
+                  <tr><td colSpan={5} style={{ padding: 18, textAlign: 'center', color: '#6B7280' }}>No exploit data found.</td></tr>
                 )}
               </tbody>
             </table>
@@ -682,11 +828,11 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
       </div>
 
       <div className="glass-card ui-ai-card" style={{ padding: 22 }}>
-        <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Brain size={14} /> AI Analysis</h3>
+        <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Brain size={14} /> AI Analysis</h3>
         <div style={{ overflowX: 'auto' }}>
           <table className="ui-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, fontFamily: 'inherit' }}>
             <thead>
-              <tr style={{ background: 'rgba(30,41,59,0.8)', color: '#6b7280', textTransform: 'uppercase', fontSize: 10, letterSpacing: 1 }}>
+              <tr style={{ background: '#121212', color: '#6B7280', textTransform: 'uppercase', fontSize: 10, letterSpacing: 1 }}>
                 {['Severity', 'Finding', 'Reason', 'Recommendation'].map(h => (
                   <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
                 ))}
@@ -694,7 +840,7 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
             </thead>
             <tbody>
               {aiAnalysisItems.map((item, idx) => (
-                <tr key={item.id || idx} style={{ borderBottom: '1px solid rgba(51,65,85,0.5)' }}>
+                <tr key={item.id || idx} style={{ borderBottom: '1px solid rgba(42,42,42,0.9)' }}>
                   <td style={{ padding: '10px 14px', color: getSeverityColor(item.severity) }}>{item.severity}</td>
                   <td style={{ padding: '10px 14px' }}>{item.finding}</td>
                   <td style={{ padding: '10px 14px' }}>{item.reason}</td>
@@ -702,7 +848,7 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
                 </tr>
               ))}
               {aiAnalysisItems.length === 0 && (
-                <tr><td colSpan={4} style={{ padding: 18, textAlign: 'center', color: '#4b5563' }}>No AI findings available.</td></tr>
+                <tr><td colSpan={4} style={{ padding: 18, textAlign: 'center', color: '#6B7280' }}>No AI findings available.</td></tr>
               )}
             </tbody>
           </table>
@@ -710,8 +856,8 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
       </div>
 
       <div className="glass-card ui-ai-card" style={{ padding: 22 }}>
-        <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Shield size={14} /> AI Mitigation</h3>
-        <p style={{ margin: '0 0 12px', fontSize: 13, color: '#cbd5e1', fontFamily: 'inherit' }}>{renderValue(results.ai_mitigation?.summary) || 'No AI mitigation summary available.'}</p>
+        <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}><Shield size={14} /> AI Mitigation</h3>
+        <p style={{ margin: '0 0 12px', fontSize: 13, color: '#A0A0A0', fontFamily: 'inherit' }}>{renderValue(results.ai_mitigation?.summary) || 'No AI mitigation summary available.'}</p>
         {Array.isArray(results.ai_mitigation?.steps) && results.ai_mitigation.steps.length > 0 ? (
           <ul className="ui-terminal-list" style={{ margin: 0, fontSize: 13 }}>
             {results.ai_mitigation.steps.map((step, idx) => (
@@ -719,7 +865,7 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
             ))}
           </ul>
         ) : (
-          <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>No mitigation steps available.</p>
+          <p style={{ margin: 0, fontSize: 12, color: '#6B7280' }}>No mitigation steps available.</p>
         )}
       </div>
 
@@ -733,13 +879,13 @@ function ResultsDashboard({ results, allCves, openPortsData, expandedCve, setExp
 function CveTable({ allCves, expandedCve, setExpandedCve }) {
   return (
     <div className="glass-card" style={{ padding: 22 }}>
-      <h3 style={{ margin: '0 0 14px', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+      <h3 style={{ margin: '0 0 14px', color: '#FFFFFF', display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
         <LayoutDashboard size={14} /> Detected Vulnerabilities ({allCves.length})
       </h3>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr style={{ background: 'rgba(30,41,59,0.8)', color: '#6b7280', textTransform: 'uppercase', fontSize: 10, letterSpacing: 1 }}>
+            <tr style={{ background: '#121212', color: '#6B7280', textTransform: 'uppercase', fontSize: 10, letterSpacing: 1 }}>
               {['S.No', 'Port', 'CVE ID', 'Severity', 'Score', 'Exploit', 'CWE Type'].map(h => (
                 <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
               ))}
@@ -752,58 +898,58 @@ function CveTable({ allCves, expandedCve, setExpandedCve }) {
                 <React.Fragment key={rowKey}>
                   <tr onClick={() => setExpandedCve(expandedCve === rowKey ? null : rowKey)}
                     className="ui-table-row"
-                    style={{ borderBottom: '1px solid rgba(51,65,85,0.5)', cursor: 'pointer', transition: 'background 0.2s' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,255,65,0.08)'}
+                    style={{ borderBottom: '1px solid rgba(42,42,42,0.9)', cursor: 'pointer', transition: 'background 0.2s' }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#222222'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{ padding: '10px 14px', color: '#fff', fontWeight: 700 }}>{idx + 1}</td>
-                    <td style={{ padding: '10px 14px', color: '#d1d5db' }}>{cve.port ?? '-'}</td>
-                    <td style={{ padding: '10px 14px', color: '#fff', fontWeight: 700 }}>{cve.cve_id}</td>
+                    <td style={{ padding: '10px 14px', color: '#FFFFFF', fontWeight: 700 }}>{idx + 1}</td>
+                    <td style={{ padding: '10px 14px', color: '#00ff41', fontWeight: 600 }}>{cve.port ?? '-'}</td>
+                    <td style={{ padding: '10px 14px', color: '#FFFFFF', fontWeight: 700 }}>{cve.cve_id}</td>
                     <td style={{ padding: '10px 14px' }}><span className={`ui-severity-label ui-severity-label-${cve.severity?.toLowerCase()}`} style={{ fontWeight: 700 }}>{cve.severity}</span></td>
                     <td style={{ padding: '10px 14px' }}>{cve.cvss_score}</td>
                     <td style={{ padding: '10px 14px' }}>
                       {cve.exploit_available ? (
-                        <span style={{ color: '#ff003c', fontWeight: 700 }}>✔ Yes</span>
+                        <span style={{ color: '#FF4D4F', fontWeight: 700 }}>✔ Yes</span>
                       ) : (
-                        <span style={{ color: '#4b5563' }}>✘ No</span>
+                        <span style={{ color: '#6B7280' }}>✘ No</span>
                       )}
                     </td>
-                    <td style={{ padding: '10px 14px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cve.cwe}</td>
+                    <td style={{ padding: '10px 14px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={cve.cwe}>{cve.cwe}</td>
                   </tr>
                   <AnimatePresence>
                     {expandedCve === rowKey && (
                       <motion.tr initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                        <td colSpan={7} className="ui-expand-panel" style={{ padding: 18, borderBottom: '1px solid rgba(51,65,85,0.5)' }}>
-                          <p style={{ margin: '0 0 8px', fontSize: 13 }}><strong style={{ color: '#d1d5db' }}>Description:</strong> {renderValue(cve.description)}</p>
-                          <p style={{ margin: '0 0 8px', fontSize: 13, color: '#00ff41' }}><strong>Mitigation:</strong> {renderValue(cve.mitigation)}</p>
+                        <td colSpan={7} className="ui-expand-panel" style={{ padding: 18, borderBottom: '1px solid rgba(42,42,42,0.9)' }}>
+                          <p style={{ margin: '0 0 8px', fontSize: 13 }}><strong style={{ color: '#A0A0A0' }}>Description:</strong> {renderValue(cve.description)}</p>
+                          <p style={{ margin: '0 0 8px', fontSize: 13, color: '#3B82F6' }}><strong>Mitigation:</strong> {renderValue(cve.mitigation)}</p>
                           {cve.ai_mitigation && (
-                            <div style={{ margin: '10px 0', padding: 12, background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.22)', borderRadius: 8 }}>
-                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#38bdf8', fontWeight: 700 }}>🤖 AI Mitigation</p>
-                              <p style={{ margin: '0 0 6px', fontSize: 12, color: '#d1d5db' }}>{renderValue(cve.ai_mitigation.summary) || 'No AI mitigation summary available'}</p>
+                            <div style={{ margin: '10px 0', padding: 12, background: 'rgba(59,130,246,0.14)', border: '1px solid rgba(59,130,246,0.28)', borderRadius: 8 }}>
+                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#3B82F6', fontWeight: 700 }}>🤖 AI Mitigation</p>
+                              <p style={{ margin: '0 0 6px', fontSize: 12, color: '#A0A0A0' }}>{renderValue(cve.ai_mitigation.summary) || 'No AI mitigation summary available'}</p>
                               {Array.isArray(cve.ai_mitigation.steps) && cve.ai_mitigation.steps.length > 0 ? (
-                                <ul style={{ margin: 0, paddingLeft: 18, color: '#d1d5db', fontSize: 12 }}>
+                                <ul style={{ margin: 0, paddingLeft: 18, color: '#A0A0A0', fontSize: 12 }}>
                                   {cve.ai_mitigation.steps.map((step, si) => (
                                     <li key={si} style={{ marginBottom: 4 }}>{renderValue(step)}</li>
                                   ))}
                                 </ul>
                               ) : (
-                                <p style={{ margin: 0, fontSize: 12, color: '#6b7280' }}>No mitigation steps available.</p>
+                                <p style={{ margin: 0, fontSize: 12, color: '#6B7280' }}>No mitigation steps available.</p>
                               )}
                             </div>
                           )}
                           {cve.ai_analysis && (
-                            <div style={{ margin: '10px 0', padding: 12, background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.22)', borderRadius: 8 }}>
-                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#60a5fa', fontWeight: 700 }}>🤖 AI Analysis</p>
-                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#d1d5db' }}><strong>Finding:</strong> {renderValue(cve.ai_analysis.finding)}</p>
-                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#d1d5db' }}><strong>Reason:</strong> {renderValue(cve.ai_analysis.reason)}</p>
-                              <p style={{ margin: 0, fontSize: 12, color: '#d1d5db' }}><strong>Recommendation:</strong> {renderValue(cve.ai_analysis.recommendation)}</p>
+                            <div style={{ margin: '10px 0', padding: 12, background: 'rgba(59,130,246,0.14)', border: '1px solid rgba(59,130,246,0.28)', borderRadius: 8 }}>
+                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#3B82F6', fontWeight: 700 }}>🤖 AI Analysis</p>
+                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#A0A0A0' }}><strong>Finding:</strong> {renderValue(cve.ai_analysis.finding)}</p>
+                              <p style={{ margin: '0 0 4px', fontSize: 12, color: '#A0A0A0' }}><strong>Reason:</strong> {renderValue(cve.ai_analysis.reason)}</p>
+                              <p style={{ margin: 0, fontSize: 12, color: '#A0A0A0' }}><strong>Recommendation:</strong> {renderValue(cve.ai_analysis.recommendation)}</p>
                             </div>
                           )}
-                          <p style={{ margin: '0 0 8px', fontSize: 12, color: '#6b7280' }}>Published: {cve.published}</p>
+                          <p style={{ margin: '0 0 8px', fontSize: 12, color: '#6B7280' }}>Published: {cve.published}</p>
                           {cve.exploit_available && cve.exploits?.length > 0 && (
-                            <div style={{ background: 'rgba(127,29,29,0.2)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: 10, marginTop: 6 }}>
-                              <p style={{ fontSize: 10, color: '#fca5a5', marginBottom: 5 }}>Known Exploits:</p>
+                            <div style={{ background: 'rgba(255,77,79,0.14)', border: '1px solid rgba(255,77,79,0.3)', borderRadius: 8, padding: 10, marginTop: 6 }}>
+                              <p style={{ fontSize: 10, color: '#FF4D4F', marginBottom: 5 }}>Known Exploits:</p>
                               {cve.exploits.map((ex, ei) => (
-                                <div key={ei}><a href={ex.exploit_url || ex.url || '#'} target="_blank" rel="noreferrer" style={{ color: '#f87171', fontSize: 12 }}>{ex.title || ex.description || `Exploit ${ex.edb_id}`}</a></div>
+                                <div key={ei}><a href={ex.exploit_url || ex.url || '#'} target="_blank" rel="noreferrer" style={{ color: '#FF4D4F', fontSize: 12 }}>{ex.title || ex.description || `Exploit ${ex.edb_id}`}</a></div>
                               ))}
                             </div>
                           )}
@@ -815,7 +961,7 @@ function CveTable({ allCves, expandedCve, setExpandedCve }) {
               );
             })}
             {allCves.length === 0 && (
-              <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center', color: '#4b5563' }}>No vulnerabilities found.</td></tr>
+              <tr><td colSpan={7} style={{ padding: 28, textAlign: 'center', color: '#6B7280' }}>No vulnerabilities found.</td></tr>
             )}
           </tbody>
         </table>
@@ -843,10 +989,10 @@ function HistoryTab({ scanHistory, setScanHistory, selectedHistoryItem, setSelec
 
   if (scanHistory.length === 0) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 14, color: '#334155', minHeight: 300 }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 14, color: '#6B7280', minHeight: 300 }}>
         <History size={64} />
         <p style={{ fontSize: 14, letterSpacing: 2, margin: 0 }}>NO SCAN HISTORY YET</p>
-        <p style={{ fontSize: 11, color: '#1e3a5f', margin: 0 }}>Completed scans will appear here</p>
+        <p style={{ fontSize: 11, color: '#6B7280', margin: 0 }}>Completed scans will appear here</p>
       </div>
     );
   }
@@ -855,9 +1001,9 @@ function HistoryTab({ scanHistory, setScanHistory, selectedHistoryItem, setSelec
     <div style={{ display: 'flex', gap: 14, flex: 1, minHeight: 0 }}>
       {/* History list */}
       <div className="glass-card ui-history-panel" style={{ width: 280, flexShrink: 0, padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(0,255,65,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 1 }}>Scan History ({scanHistory.length})</span>
-          <button onClick={clearHistory} className="ui-btn" style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer', color: '#94a3b8', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 6 }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(59,130,246,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 11, color: '#A0A0A0', textTransform: 'uppercase', letterSpacing: 1 }}>Scan History ({scanHistory.length})</span>
+          <button onClick={clearHistory} className="ui-btn" style={{ background: 'none', border: '1px solid rgba(42,42,42,0.9)', cursor: 'pointer', color: '#A0A0A0', fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px', borderRadius: 6 }}>
             <Trash2 size={11} /> Clear
           </button>
         </div>
@@ -866,28 +1012,28 @@ function HistoryTab({ scanHistory, setScanHistory, selectedHistoryItem, setSelec
             <div key={item.id}
               onClick={() => setSelectedHistoryItem(item)}
               style={{
-                padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid rgba(75,85,99,0.25)',
-                background: selectedHistoryItem?.id === item.id ? 'rgba(0,208,255,0.08)' : 'transparent',
-                borderLeft: selectedHistoryItem?.id === item.id ? '3px solid #00ff41' : '3px solid transparent',
+                padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid rgba(42,42,42,0.9)',
+                background: selectedHistoryItem?.id === item.id ? 'rgba(59,130,246,0.12)' : 'transparent',
+                borderLeft: selectedHistoryItem?.id === item.id ? '3px solid #3B82F6' : '3px solid transparent',
                 transition: 'all 0.2s', position: 'relative'
               }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>{item.target}</span>
+                <span style={{ fontSize: 13, color: '#FFFFFF', fontWeight: 600 }}>{item.target}</span>
                 <button onClick={e => { e.stopPropagation(); deleteItem(item.id); }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4b5563', padding: 0 }}>
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', padding: 0 }}>
                   <X size={12} />
                 </button>
               </div>
-              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 3 }}>{item.time}</div>
+              <div style={{ fontSize: 11, color: '#6B7280', marginTop: 3 }}>{item.time}</div>
               <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                <span style={{ fontSize: 10, color: '#00ff41', background: 'rgba(0,255,65,0.12)', padding: '2px 6px', borderRadius: 3 }}>
+                <span style={{ fontSize: 10, color: '#3B82F6', background: 'rgba(59,130,246,0.12)', padding: '2px 6px', borderRadius: 3 }}>
                   {item.openPorts} ports
                 </span>
-                <span style={{ fontSize: 10, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '2px 6px', borderRadius: 3 }}>
+                <span style={{ fontSize: 10, color: '#FF8C42', background: 'rgba(255,140,66,0.14)', padding: '2px 6px', borderRadius: 3 }}>
                   {item.cveCount} CVEs
                 </span>
                 {item.riskScore !== null && (
-                  <span style={{ fontSize: 10, color: item.riskScore > 70 ? '#ff003c' : '#f59e0b', background: 'rgba(255,0,60,0.08)', padding: '2px 6px', borderRadius: 3 }}>
+                  <span style={{ fontSize: 10, color: item.riskScore > 70 ? '#FF4D4F' : '#FF8C42', background: 'rgba(255,77,79,0.14)', padding: '2px 6px', borderRadius: 3 }}>
                     Risk {item.riskScore}
                   </span>
                 )}
@@ -902,19 +1048,29 @@ function HistoryTab({ scanHistory, setScanHistory, selectedHistoryItem, setSelec
         {selectedHistoryItem ? (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
-              <Eye size={14} style={{ color: '#00ff41' }} />
-              <span style={{ fontSize: 12, color: '#00ff41' }}>Viewing scan: <strong>{selectedHistoryItem.target}</strong> — {selectedHistoryItem.time}</span>
+              <Eye size={14} style={{ color: '#3B82F6' }} />
+              <span style={{ fontSize: 12, color: '#3B82F6' }}>Viewing scan: <strong>{selectedHistoryItem.target}</strong> — {selectedHistoryItem.time}</span>
             </div>
-            <ResultsDashboard
-              results={selectedHistoryItem.data}
-              allCves={selectedHistoryItem.data?.hosts?.flatMap(h => h.open_ports?.flatMap(p => p.vulnerabilities || []) || []) || []}
-              openPortsData={selectedHistoryItem.data?.hosts?.[0]?.open_ports?.map(p => ({ name: `${p.port}/${p.service || 'tcp'}`, value: 1 })) || []}
-              expandedCve={expandedCve}
-              setExpandedCve={setExpandedCve}
-            />
+            {selectedHistoryItem.outputMode === 'json' ? (
+              <JsonOutputView results={selectedHistoryItem.data} />
+            ) : (
+              <ResultsDashboard
+                results={selectedHistoryItem.data}
+                allCves={
+                  selectedHistoryItem.data?.hosts?.flatMap(h =>
+                    (h.open_ports || []).flatMap(p =>
+                      (p.vulnerabilities || []).map(v => ({ ...v, port: v.port ?? p.port }))
+                    )
+                  ) || []
+                }
+                openPortsData={selectedHistoryItem.data?.hosts?.[0]?.open_ports?.map(p => ({ name: `${p.port}/${p.service || 'tcp'}`, value: 1 })) || []}
+                expandedCve={expandedCve}
+                setExpandedCve={setExpandedCve}
+              />
+            )}
           </motion.div>
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: '#334155', minHeight: 200 }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: '#6B7280', minHeight: 200 }}>
             <ChevronRight size={40} />
             <p style={{ fontSize: 13, letterSpacing: 1, margin: 0 }}>SELECT A SCAN TO VIEW DETAILS</p>
           </div>
@@ -941,11 +1097,11 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: '#0d1117', color: '#f8fafc' }}>
+        <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: '#0D0D0D', color: '#FFFFFF' }}>
           <div style={{ maxWidth: 600, textAlign: 'center' }}>
-            <h2 style={{ margin: 0, color: '#f87171' }}>Something went wrong.</h2>
-            <p style={{ color: '#cbd5e1', marginTop: 12 }}>{this.state.error?.message || 'An unexpected UI error occurred.'}</p>
-            <button onClick={() => this.setState({ hasError: false, error: null })} style={{ marginTop: 16, padding: '10px 16px', borderRadius: 8, background: '#2563eb', color: '#fff', border: 'none', cursor: 'pointer' }}>Reload UI</button>
+            <h2 style={{ margin: 0, color: '#FF4D4F' }}>Something went wrong.</h2>
+            <p style={{ color: '#A0A0A0', marginTop: 12 }}>{this.state.error?.message || 'An unexpected UI error occurred.'}</p>
+            <button onClick={() => this.setState({ hasError: false, error: null })} style={{ marginTop: 16, padding: '10px 16px', borderRadius: 8, background: '#3B82F6', color: '#FFFFFF', border: 'none', cursor: 'pointer' }}>Reload UI</button>
           </div>
         </div>
       );

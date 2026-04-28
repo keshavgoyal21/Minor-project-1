@@ -5,7 +5,7 @@
   "scripts": {
     "install": "cd frontend && npm install",
     "frontend": "cd frontend && npm run dev",
-    "backend": "cd backend && python -m uvicorn main:app --reload --port 8000",
+    "backend": "cd backend && ../../venv/bin/python3 -m uvicorn main:app --reload --port 8000",
     "dev": "concurrently \"npm:backend\" \"npm:frontend\"",
     "build": "cd frontend && npm run build"
   },
