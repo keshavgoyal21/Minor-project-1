@@ -59,7 +59,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_STATUS_TTL = 20
+API_STATUS_TTL = 60  # seconds — avoid hammering the NVD endpoint
 api_status_cache = {
     "status": {
         "nvd_api": False,
@@ -128,28 +128,16 @@ def _check_nvd_api_key() -> bool:
 
     try:
         import requests
-        from requests.adapters import HTTPAdapter
-        from urllib3.util.retry import Retry
     except ImportError:
         return False
 
-    session = requests.Session()
-    retry = Retry(
-        total=2,
-        backoff_factor=0.8,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        raise_on_status=False,
-    )
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    session.mount("http://", HTTPAdapter(max_retries=retry))
-
     try:
-        response = session.get(
+        # Single attempt, no retries — just a quick liveness ping
+        response = requests.get(
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             headers={"apiKey": api_key},
-            params={"keywordSearch": "vulnscan health check", "resultsPerPage": 1},
-            timeout=3,
+            params={"resultsPerPage": 1},
+            timeout=5,
         )
         return response.status_code == 200
     except Exception:
@@ -175,13 +163,21 @@ async def _get_api_status() -> Dict[str, bool]:
         if gemini_key and len(gemini_key) > 5:
             try:
                 import importlib.util
-                gemini_installed = bool(importlib.util.find_spec("google.genai") or importlib.util.find_spec("google.generativeai"))
+                gemini_installed = bool(
+                    importlib.util.find_spec("google.genai")
+                    or importlib.util.find_spec("google.generativeai")
+                )
             except Exception:
                 gemini_installed = False
             status["gemini_ai"] = gemini_installed
         return status
 
-    status = await asyncio.to_thread(compute_status)
+    try:
+        status = await asyncio.wait_for(asyncio.to_thread(compute_status), timeout=7.0)
+    except asyncio.TimeoutError:
+        logger.warning("API status check timed out — returning cached/default values")
+        status = api_status_cache["status"].copy()
+
     api_status_cache["status"] = status
     api_status_cache["last_checked"] = now
     return status
