@@ -5,3 +5,13 @@ venv/
 .DS_Store
 __pycache__/
 *.pyc
+krish copyright.docx
+docx_dump.json
+.gitignore
+dump_docx.py
+dump_docx2.py
+update_docx.py
+Q-A-Copyright.docx
+krish_final.docx
+generate_docx.py
+copyright.docx
